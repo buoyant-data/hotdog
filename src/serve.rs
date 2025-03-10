@@ -63,7 +63,7 @@ pub trait Server {
                 error!("Failure occurred while read_logs executed: {:?}", e);
             }
 
-            stats.send((status::Stats::ConnectionCount, -1)).await;
+            let _ = stats.send((status::Stats::ConnectionCount, -1)).await;
         });
 
         Ok(())
@@ -108,7 +108,7 @@ pub trait Server {
             let stream = stream?;
             debug!("Accepting from: {}", stream.peer_addr()?);
 
-            state.stats.send((status::Stats::ConnectionCount, 1)).await;
+            let _ = state.stats.send((status::Stats::ConnectionCount, 1)).await;
 
             let connection =
                 Connection::new(state.settings.clone(), sender.clone(), state.stats.clone());

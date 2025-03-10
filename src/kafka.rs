@@ -169,7 +169,7 @@ impl Kafka {
                      */
                     match producer.send(record, timeout).await {
                         Ok(_) => {
-                            stats
+                            let _ = stats
                                 .send((Stats::KafkaMsgSubmitted { topic: kmsg.topic }, 1))
                                 .await;
                             /*
@@ -177,7 +177,7 @@ impl Kafka {
                              * give a u128 (!).
                              */
                             if let Ok(elapsed) = start_time.elapsed().as_micros().try_into() {
-                                stats.send((Stats::KafkaMsgSent, elapsed)).await;
+                                let _ = stats.send((Stats::KafkaMsgSent, elapsed)).await;
                             } else {
                                 error!("Could not collect message time because the duration couldn't fit in an i64, yikes");
                             }
@@ -190,7 +190,7 @@ impl Kafka {
                                  */
                                 KafkaError::MessageProduction(err_type) => {
                                     error!("Failed to send message to Kafka due to: {}", err_type);
-                                    stats
+                                    let _ = stats
                                         .send((
                                             Stats::KafkaMsgErrored {
                                                 errcode: metric_name_for(err_type),
@@ -201,7 +201,7 @@ impl Kafka {
                                 }
                                 _ => {
                                     error!("Failed to send message to Kafka!");
-                                    stats
+                                    let _ = stats
                                         .send((
                                             Stats::KafkaMsgErrored {
                                                 errcode: String::from("generic"),

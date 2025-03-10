@@ -3,26 +3,21 @@ use crate::errors;
 use crate::serve::*;
 use crate::settings::*;
 use crate::status;
-/**
- * This module handles the necessary configuration to serve over TLS
- */
+///
+/// This module handles the necessary configuration to serve over TLS
+///
 use async_channel::Sender;
 use async_std::{io, io::BufReader, net::TcpStream, sync::Arc, task};
 use async_tls::TlsAcceptor;
 use log::*;
-use rustls::internal::pemfile::{certs, pkcs8_private_keys, rsa_private_keys};
-use rustls::{
-    AllowAnyAnonymousOrAuthenticatedClient, Certificate, NoClientAuth, PrivateKey, RootCertStore,
-    ServerConfig,
-};
+use rustls::server::ServerConfig;
+use rustls::{Certificate, PrivateKey, RootCertStore};
 use std::path::Path;
 
-/**
- * TlsServer is a syslog-over-TLS implementation, which will allow for receiving logs over a TLS
- * encrypted channel.
- *
- * Currently client authentication is not supported
- */
+/// TlsServer is a syslog-over-TLS implementation, which will allow for receiving logs over a TLS
+/// encrypted channel.
+///
+/// Currently client authentication is not supported
 pub struct TlsServer {
     acceptor: TlsAcceptor,
 }
@@ -68,46 +63,44 @@ impl Server for TlsServer {
                 }
             };
 
-            stats.send((status::Stats::ConnectionCount, -1)).await;
+            let _ = stats.send((status::Stats::ConnectionCount, -1)).await;
         });
         Ok(())
     }
 }
 
-/**
- * Generate the default ServerConfig needed for rustls to work properly in server mode
- */
+/// Generate the default ServerConfig needed for rustls to work properly in server mode
 fn load_tls_config(state: &ServerState) -> io::Result<ServerConfig> {
     match &state.settings.global.listen.tls {
-        TlsType::CertAndKey { cert, key, ca } => {
-            let certs = load_certs(cert.as_path())?;
+        TlsType::CertAndKey { cert: _, key, ca } => {
             let mut keys = load_keys(key.as_path())?;
 
             if keys.is_empty() {
                 panic!("TLS key could not be properly loaded! This is fatal!");
             }
 
-            let verifier = if ca.is_some() {
-                let ca_path = ca.as_ref().unwrap();
+            if let Some(ca_path) = ca.as_ref() {
                 let mut store = RootCertStore::empty();
-                if let Err(e) = store.add_pem_file(&mut std::io::BufReader::new(
-                    std::fs::File::open(ca_path.as_path())?,
-                )) {
-                    error!("Failed to add the CA properly, certificate verification may not work as expected: {:?}", e);
+                let mut pemfile_reader =
+                    std::io::BufReader::new(std::fs::File::open(ca_path.as_path())?);
+                let certs: Vec<Certificate> = rustls_pemfile::certs(&mut pemfile_reader)
+                    .expect("Failed to load certs")
+                    .into_iter()
+                    .map(Certificate)
+                    .collect();
+
+                for cert in &certs {
+                    let _ = store.add(cert);
                 }
-                AllowAnyAnonymousOrAuthenticatedClient::new(store)
+
+                Ok(ServerConfig::builder()
+                    .with_safe_defaults()
+                    .with_no_client_auth()
+                    .with_single_cert(certs, keys.remove(0))
+                    .expect("Not able to create the ServerConfig"))
             } else {
-                NoClientAuth::new()
-            };
-
-            // we don't use client authentication
-            let mut config = ServerConfig::new(verifier);
-            config
-                // set this server to use one cert together with the loaded private key
-                .set_single_cert(certs, keys.remove(0))
-                .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
-
-            Ok(config)
+                panic!("Cannot load certs without a CA");
+            }
         }
         _ => {
             panic!("Attempted to load a TLS configuration despite TLS not being enabled");
@@ -115,31 +108,24 @@ fn load_tls_config(state: &ServerState) -> io::Result<ServerConfig> {
     }
 }
 
-/// Load the passed certificates file
-fn load_certs(path: &Path) -> io::Result<Vec<Certificate>> {
-    debug!("Loading TLS certs from: {}", path.display());
-    certs(&mut std::io::BufReader::new(std::fs::File::open(path)?))
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid cert"))
-}
+/// Loads the keys file passed in, whether it is an RSA or PKCS8 formatted key
+fn load_keys(path: &Path) -> std::io::Result<Vec<PrivateKey>> {
+    let file = std::fs::File::open(path)?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut keys = rustls_pemfile::read_all(&mut reader)?;
 
-/**
- * Loads the keys file passed in, whether it is an RSA or PKCS8 formatted key
- */
-fn load_keys(path: &Path) -> io::Result<Vec<PrivateKey>> {
-    debug!("Loading TLS keys from: {}", path.display());
-
-    let result = rsa_private_keys(&mut std::io::BufReader::new(std::fs::File::open(path)?))
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid key"));
-
-    if let Ok(keys) = result {
-        if keys.is_empty() {
-            debug!("Failed to load key as RSA, trying PKCS8");
-            return pkcs8_private_keys(&mut std::io::BufReader::new(std::fs::File::open(path)?))
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid key"));
-        }
-        return Ok(keys);
+    match keys.len() {
+        1 => match keys.remove(0) {
+            rustls_pemfile::Item::RSAKey(key) => Ok(vec![PrivateKey(key)]),
+            rustls_pemfile::Item::PKCS8Key(key) => Ok(vec![PrivateKey(key)]),
+            item => Err(std::io::Error::other(format!(
+                "Failed to load keys properly found {item:?}"
+            ))),
+        },
+        other => Err(std::io::Error::other(format!(
+            "Failed to load keys properly, {other:?} found"
+        ))),
     }
-    result
 }
 
 #[cfg(test)]
@@ -147,32 +133,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_load_certs() {
-        let cert_path = Path::new("./contrib/cert.pem");
-        if let Ok(certs) = load_certs(&cert_path) {
-            assert_eq!(1, certs.len());
-        } else {
-            assert!(false);
-        }
-    }
-
-    #[test]
     fn test_load_keys_rsa() {
         let key_path = Path::new("./contrib/cert-key.pem");
-        if let Ok(keys) = load_keys(&key_path) {
+        if let Ok(keys) = load_keys(key_path) {
             assert_eq!(1, keys.len());
         } else {
-            assert!(false);
+            panic!("Failed to find or load an RSA key");
         }
     }
 
     #[test]
     fn test_load_keys_pkcs8() {
         let key_path = Path::new("./contrib/pkcs8-key.pem");
-        if let Ok(keys) = load_keys(&key_path) {
+        if let Ok(keys) = load_keys(key_path) {
             assert_eq!(1, keys.len());
         } else {
-            assert!(false);
+            panic!("Failed to find or load a PKCS8 key");
         }
     }
 }

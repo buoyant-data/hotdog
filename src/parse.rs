@@ -37,7 +37,7 @@ pub fn parse_line(line: String) -> std::result::Result<SyslogMessage, SyslogErro
             Ok(wrapped)
         }
         Err(_) => {
-            let parsed = syslog_loose::parse_message(&line);
+            let parsed = syslog_loose::parse_message(&line, syslog_loose::Variant::Either);
 
             /*
              * Since syslog_loose doesn't give a Result, the only way to tell if themessage wasn't

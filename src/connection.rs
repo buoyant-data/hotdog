@@ -89,7 +89,7 @@ impl Connection {
             let parsed = parse::parse_line(line);
 
             if let Err(e) = &parsed {
-                self.stats.send((Stats::LogParseError, 1)).await;
+                let _ = self.stats.send((Stats::LogParseError, 1)).await;
                 error!("failed to parse message: {:?}", e);
                 continue;
             }
@@ -100,7 +100,7 @@ impl Connection {
              * simd_json parse
              */
             let mut msg = parsed.unwrap();
-            self.stats.send((Stats::LineReceived, 1)).await;
+            let _ = self.stats.send((Stats::LineReceived, 1)).await;
             let mut continue_rules = true;
             debug!("parsed as: {}", msg.msg);
 
@@ -192,7 +192,7 @@ impl Connection {
                                  * should be skipped.
                                  */
                                 let kmsg = KafkaMessage::new(actual_topic, output);
-                                self.sender.send(kmsg).await;
+                                let _ = self.sender.send(kmsg).await;
                                 /*
                                  * Ensure that we're allowing other tasks to execute when we pass
                                  * things off to the channel
@@ -203,7 +203,7 @@ impl Connection {
                                 continue_rules = false;
                             } else {
                                 error!("Failed to process the configured topic: `{}`", topic);
-                                self.stats.send((Stats::TopicParseFailed, 1)).await;
+                                let _ = self.stats.send((Stats::TopicParseFailed, 1)).await;
                             }
                             break;
                         }
@@ -324,7 +324,7 @@ fn perform_merge(buffer: &mut str, template_id: &str, state: &RuleState) -> Resu
              */
             if !to_merge.is_object() {
                 error!("Merge requested was not a JSON object: {}", to_merge);
-                state.stats.send((Stats::MergeTargetNotJsonError, 1));
+                let _ = state.stats.send((Stats::MergeTargetNotJsonError, 1));
                 return Ok(buffer.to_string());
             }
 
@@ -337,7 +337,7 @@ fn perform_merge(buffer: &mut str, template_id: &str, state: &RuleState) -> Resu
         Err("Failed to merge and serialize".to_string())
     } else {
         error!("Failed to parse as JSON, stopping actions: {}", buffer);
-        state.stats.send((Stats::MergeInvalidJsonError, 1));
+        let _ = state.stats.send((Stats::MergeInvalidJsonError, 1));
         Err("Not JSON".to_string())
     }
 }
@@ -366,7 +366,7 @@ mod tests {
     fn merge_with_empty() {
         let mut hb = Handlebars::new();
         let template_id = "1";
-        hb.register_template_string(&template_id, "{}");
+        let _ = hb.register_template_string(template_id, "{}");
 
         let hash = HashMap::<String, String>::new();
         let state = rule_state(&hb, &hash);
@@ -383,7 +383,7 @@ mod tests {
     fn merge_with_non_object() -> std::result::Result<(), String> {
         let mut hb = Handlebars::new();
         let template_id = "1";
-        hb.register_template_string(&template_id, "[1]");
+        let _ = hb.register_template_string(template_id, "[1]");
 
         let hash = HashMap::<String, String>::new();
         let state = rule_state(&hb, &hash);
@@ -401,7 +401,7 @@ mod tests {
     fn merge_without_json_buffer() {
         let mut hb = Handlebars::new();
         let template_id = "1";
-        hb.register_template_string(&template_id, "{}");
+        let _ = hb.register_template_string(template_id, "{}");
 
         let hash = HashMap::<String, String>::new();
         let state = rule_state(&hb, &hash);
@@ -419,7 +419,7 @@ mod tests {
     fn merge_with_json_buffer() {
         let mut hb = Handlebars::new();
         let template_id = "1";
-        hb.register_template_string(&template_id, r#"{"hello":1}"#);
+        let _ = hb.register_template_string(template_id, r#"{"hello":1}"#);
 
         let hash = HashMap::<String, String>::new();
         let state = rule_state(&hb, &hash);
@@ -436,7 +436,7 @@ mod tests {
     fn merge_with_json_buffer_and_vars() {
         let mut hb = Handlebars::new();
         let template_id = "1";
-        hb.register_template_string(&template_id, r#"{"hello":"{{name}}"}"#);
+        let _ = hb.register_template_string(template_id, r#"{"hello":"{{name}}"}"#);
 
         let mut hash = HashMap::<String, String>::new();
         hash.insert("name".to_string(), "world".to_string());

@@ -89,8 +89,7 @@ pub fn merge(a: &mut Value, b: &Value) {
 
 fn merge_in(json_value: &mut Value, json_pointer: &str, new_json_value: Value) {
     let mut fields: Vec<&str> = json_pointer.split('/').skip(1).collect();
-    //let first_field = fields[0].clone();
-    let first_field = fields[0].clone();
+    let first_field = fields[0];
     fields.remove(0);
     let next_fields = fields;
 
