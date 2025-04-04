@@ -1,45 +1,39 @@
+///! The connection module is responsible for handling everything pertaining to a single inbound TCP
+///! connection.
+use async_channel::Sender;
+use chrono::prelude::*;
+use handlebars::Handlebars;
+use smol::io::{AsyncBufReadExt, BufReader};
+use smol::stream::StreamExt;
+use tracing::log::*;
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use crate::errors;
-use crate::kafka::KafkaMessage;
 use crate::merge;
 use crate::parse;
 use crate::rules;
 use crate::settings::*;
+use crate::sink::kafka::KafkaMessage;
 use crate::status::{Statistic, Stats};
-/**
- * The connection module is responsible for handling everything pertaining to a single inbound TCP
- * connection.
- */
-use async_channel::Sender;
-use async_std::{io::BufReader, prelude::*, sync::Arc, task};
-use chrono::prelude::*;
-use handlebars::Handlebars;
-use log::*;
-use std::collections::HashMap;
 
-/**
- * RuleState exists to help carry state into merge/replacement functions and exists only during the
- * processing of rules
- */
+/// RuleState exists to help carry state into merge/replacement functions and exists only during the
+/// processing of rules
 struct RuleState<'a> {
     variables: &'a HashMap<String, String>,
     hb: &'a handlebars::Handlebars<'a>,
     stats: Sender<Statistic>,
 }
 
-/**
- * Simple type to capture a map of precompiled jmespath expressions
- */
+/// Simple type to capture a map of precompiled jmespath expressions
 pub type JmesPathExpressions<'a> = HashMap<String, jmespath::Expression<'a>>;
 
 pub struct Connection {
-    /**
-     * A reference to the global Settings object for all configuration information
-     */
+    /// A reference to the global Settings object for all configuration information
     settings: Arc<Settings>,
-    /**
-     * The sender-side of the channel to our Kafka connection, allowing the logs read in to be
-     * sent over to the Kafka handler
-     */
+    /// The sender-side of the channel to our Kafka connection, allowing the logs read in to be
+    /// sent over to the Kafka handler
     sender: Sender<KafkaMessage>,
     stats: Sender<Statistic>,
 }
@@ -57,11 +51,8 @@ impl Connection {
         }
     }
 
-    /**
-     * connection_loop is responsible for handling incoming syslog streams connections
-     *
-     */
-    pub async fn read_logs<R: async_std::io::Read + std::marker::Unpin>(
+    /// connection_loop is responsible for handling incoming syslog streams connections
+    pub async fn read_logs<R: smol::io::AsyncRead + std::marker::Unpin>(
         &self,
         reader: BufReader<R>,
     ) -> Result<(), errors::HotdogError> {
@@ -71,13 +62,17 @@ impl Connection {
         let mut jmespaths = JmesPathExpressions::new();
 
         if !precompile_templates(&mut hb, self.settings.clone()) {
-            error!("Failing to precompile templates is a fatal error, not going to parse logs since the configuration is broken");
+            error!(
+                "Failing to precompile templates is a fatal error, not going to parse logs since the configuration is broken"
+            );
             // TODO fix the Err types
             return Ok(());
         }
 
         if !precompile_jmespath(&mut jmespaths, self.settings.clone()) {
-            error!("Failing to precompile jmespaths is a fata error, not parsing this connection's logs because the configuration is broken");
+            error!(
+                "Failing to precompile jmespaths is a fata error, not parsing this connection's logs because the configuration is broken"
+            );
             // TODO fix the Err types
             return Ok(());
         }
@@ -173,7 +168,7 @@ impl Connection {
                      * inherent in smol (under async-std 1.6.x) which will properly
                      * yield to other tasks in the runtime.
                      */
-                    task::yield_now().await;
+                    smol::future::yield_now().await;
 
                     match action {
                         Action::Forward { topic } => {
@@ -199,7 +194,7 @@ impl Connection {
                                  *
                                  * See also https://github.com/stjepang/smol/issues/159
                                  */
-                                task::yield_now().await;
+                                smol::future::yield_now().await;
                                 continue_rules = false;
                             } else {
                                 error!("Failed to process the configured topic: `{}`", topic);
@@ -245,20 +240,16 @@ impl Connection {
     }
 }
 
-/**
- * Generate a unique identifier for the given template
- */
+/// Generate a unique identifier for the given template
 fn template_id_for(rule: &Rule, index: usize) -> String {
     format!("{}-{}", rule.uuid, index)
 }
 
-/**
- * precompile_templates will register templates for all the Merge and Replace actions from the
- * settings
- *
- * Will usually return a true, unless some setting parse failure occurred which is a critical
- * failure for the daemon
- */
+/// precompile_templates will register templates for all the Merge and Replace actions from the
+/// settings
+///
+/// Will usually return a true, unless some setting parse failure occurred which is a critical
+/// failure for the daemon
 fn precompile_templates(hb: &mut Handlebars, settings: Arc<Settings>) -> bool {
     for rule in settings.rules.iter() {
         for index in 0..rule.actions.len() {
@@ -290,10 +281,8 @@ fn precompile_templates(hb: &mut Handlebars, settings: Arc<Settings>) -> bool {
     true
 }
 
-/**
- * precompile_jmespath will pre-generate all the necessary JMESPath::Variable objects from the
- * configuration file and shove thoe in the map given to it
- */
+/// precompile_jmespath will pre-generate all the necessary JMESPath::Variable objects from the
+/// configuration file and shove thoe in the map given to it
 fn precompile_jmespath(map: &mut JmesPathExpressions, settings: Arc<Settings>) -> bool {
     for rule in settings.rules.iter() {
         if let Some(expression) = &rule.jmespath {
@@ -310,9 +299,7 @@ fn precompile_jmespath(map: &mut JmesPathExpressions, settings: Arc<Settings>) -
     true
 }
 
-/**
- * perform_merge will generate the buffer resulting of the JSON merge
- */
+/// perform_merge will generate the buffer resulting of the JSON merge
 fn perform_merge(buffer: &mut str, template_id: &str, state: &RuleState) -> Result<String, String> {
     if let Ok(mut msg_json) = crate::json::from_str(buffer) {
         if let Ok(mut rendered) = state.hb.render(template_id, &state.variables) {
@@ -347,9 +334,7 @@ mod tests {
     use super::*;
     use async_channel::bounded;
 
-    /**
-     * Generating a test RuleState for consistent states in test
-     */
+    /// Generating a test RuleState for consistent states in test
     fn rule_state<'a>(
         hb: &'a handlebars::Handlebars<'a>,
         hash: &'a HashMap<String, String>,
@@ -376,9 +361,7 @@ mod tests {
         assert_eq!(output, Ok("{}".to_string()));
     }
 
-    /**
-     * merge without a JSON object, this should return the original buffer
-     */
+    /// merge without a JSON object, this should return the original buffer
     #[test]
     fn merge_with_non_object() -> std::result::Result<(), String> {
         let mut hb = Handlebars::new();
@@ -394,9 +377,7 @@ mod tests {
         Ok(())
     }
 
-    /**
-     * merging without a JSON buffer should return an error
-     */
+    /// merging without a JSON buffer should return an error
     #[test]
     fn merge_without_json_buffer() {
         let mut hb = Handlebars::new();
@@ -412,9 +393,7 @@ mod tests {
         assert_eq!(output, expected);
     }
 
-    /**
-     * merging with a JSON buffer should return Ok with the right result
-     */
+    /// merging with a JSON buffer should return Ok with the right result
     #[test]
     fn merge_with_json_buffer() {
         let mut hb = Handlebars::new();
@@ -429,9 +408,7 @@ mod tests {
         assert_eq!(output, Ok("{\"hello\":1}".to_string()));
     }
 
-    /**
-     * Ensure that merging with a JSON buffer that it renders variable substitutions
-     */
+    /// Ensure that merging with a JSON buffer that it renders variable substitutions
     #[test]
     fn merge_with_json_buffer_and_vars() {
         let mut hb = Handlebars::new();

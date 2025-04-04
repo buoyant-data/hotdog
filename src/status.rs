@@ -4,15 +4,16 @@
  *
  * The status module is also responsible for dispatching _all_ statsd metrics.
  */
-use async_channel::{bounded, Receiver, Sender};
-use async_std::sync::Arc;
+use async_channel::{Receiver, Sender, bounded};
 use dashmap::DashMap;
 use dipstick::{InputScope, StatsdScope};
-use log::*;
 use serde::{Deserialize, Serialize};
+use tide::{Body, Request, Response, StatusCode};
+use tracing::log::*;
+
 use std::collections::HashMap;
 use std::convert::TryInto;
-use tide::{Body, Request, Response, StatusCode};
+use std::sync::Arc;
 
 /**
  * HealthResponse is the simple struct used for serializing statistics for the /stats healthcheck

@@ -7,12 +7,15 @@ use crate::status;
 /// This module handles the necessary configuration to serve over TLS
 ///
 use async_channel::Sender;
-use async_std::{io, io::BufReader, net::TcpStream, sync::Arc, task};
 use async_tls::TlsAcceptor;
-use log::*;
 use rustls::server::ServerConfig;
 use rustls::{Certificate, PrivateKey, RootCertStore};
+use smol::io::BufReader;
+use smol::net::TcpStream;
+use tracing::log::*;
+
 use std::path::Path;
+use std::sync::Arc;
 
 /// TlsServer is a syslog-over-TLS implementation, which will allow for receiving logs over a TLS
 /// encrypted channel.
@@ -47,7 +50,7 @@ impl Server for TlsServer {
         // Calling `acceptor.accept` will start the TLS handshake
         let handshake = self.acceptor.accept(stream);
 
-        task::spawn(async move {
+        smol::spawn(async move {
             // The handshake is a future we can await to get an encrypted
             // stream back.
             match handshake.await {
@@ -64,15 +67,16 @@ impl Server for TlsServer {
             };
 
             let _ = stats.send((status::Stats::ConnectionCount, -1)).await;
-        });
+        })
+        .detach();
         Ok(())
     }
 }
 
 /// Generate the default ServerConfig needed for rustls to work properly in server mode
-fn load_tls_config(state: &ServerState) -> io::Result<ServerConfig> {
+fn load_tls_config(state: &ServerState) -> std::io::Result<ServerConfig> {
     match &state.settings.global.listen.tls {
-        TlsType::CertAndKey { cert: _, key, ca } => {
+        TlsType::CertAndKey { cert, key, ca } => {
             let mut keys = load_keys(key.as_path())?;
 
             if keys.is_empty() {
@@ -80,26 +84,21 @@ fn load_tls_config(state: &ServerState) -> io::Result<ServerConfig> {
             }
 
             if let Some(ca_path) = ca.as_ref() {
-                let mut store = RootCertStore::empty();
+                panic!("Using a custom Certificate Authority is not currently supported!");
+            } else {
+                debug!("Loading the certificate and key into the ServerConfig: {cert:?}");
                 let mut pemfile_reader =
-                    std::io::BufReader::new(std::fs::File::open(ca_path.as_path())?);
+                    std::io::BufReader::new(std::fs::File::open(cert.as_path())?);
                 let certs: Vec<Certificate> = rustls_pemfile::certs(&mut pemfile_reader)
                     .expect("Failed to load certs")
                     .into_iter()
                     .map(Certificate)
                     .collect();
-
-                for cert in &certs {
-                    let _ = store.add(cert);
-                }
-
                 Ok(ServerConfig::builder()
                     .with_safe_defaults()
                     .with_no_client_auth()
                     .with_single_cert(certs, keys.remove(0))
                     .expect("Not able to create the ServerConfig"))
-            } else {
-                panic!("Cannot load certs without a CA");
             }
         }
         _ => {

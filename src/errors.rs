@@ -1,6 +1,4 @@
-/**
- * This module only contains the expected errors emitted from Hotdog
- */
+//! This module only contains the expected errors emitted from Hotdog
 
 #[derive(Debug)]
 pub enum HotdogError {

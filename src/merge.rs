@@ -1,6 +1,4 @@
-/*
- * Disabling this lint because I don't want to fix it in this imported code
- */
+// Disabling this lint because I don't want to fix it in this imported code
 #![allow(clippy::clone_double_ref)]
 /**
  * This module is from the crate json_value_merge

@@ -2,12 +2,13 @@
  * The settings module contains the necessary structs and code to process the
  * hotdog.yml file format
  */
-use async_std::path::Path;
-use log::*;
 use serde_json::Value;
-use std::collections::HashMap;
-use std::time::Duration;
+use tracing::log::*;
 use uuid::Uuid;
+
+use std::collections::HashMap;
+use std::path::Path;
+use std::time::Duration;
 
 pub fn load(file: &str) -> Settings {
     let conf = load_configuration(file);
@@ -188,13 +189,7 @@ impl Settings {
     }
 }
 
-/*
- * Default functions
- */
-
-/**
- * Return the default size used for the Kafka buffer
- */
+/// Return the default size used for the Kafka buffer
 fn kafka_buffer_default() -> usize {
     1024
 }

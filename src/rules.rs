@@ -1,12 +1,17 @@
+//!
+//! Rules processing
+//!
+
+use smol::fs::*;
+use smol::io::{AsyncBufReadExt, BufReader};
+use smol::stream::StreamExt;
+use tracing::log::*;
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use crate::errors;
 use crate::settings::*;
-/**
- * Rules processing module
- *
- */
-use async_std::{fs::File, io::BufReader, prelude::*, sync::Arc};
-use log::*;
-use std::collections::HashMap;
 
 pub async fn test_rules(
     file_name: &str,
@@ -78,7 +83,10 @@ pub fn apply_rule(
                     if let Some(value) = result.as_string() {
                         hash.insert("value".to_string(), value.to_string());
                     } else {
-                        warn!("Unable to parse out the string value for {}, the `value` variable substitution will not be available,", result);
+                        warn!(
+                            "Unable to parse out the string value for {}, the `value` variable substitution will not be available,",
+                            result
+                        );
                     }
                 }
             }

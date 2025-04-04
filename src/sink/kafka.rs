@@ -1,20 +1,22 @@
-use crate::status::{Statistic, Stats};
-use async_channel::{bounded, Receiver, Sender};
-/**
- * The Kafka module contains all the tooling/code necessary for connecting hotdog to Kafka for
- * sending log lines along as Kafka messages
- */
-use async_std::task;
-use log::*;
+//!
+//! The Kafka module contains all the tooling/code necessary for connecting hotdog to Kafka for
+//! sending log lines along as Kafka messages
+//!
+
+use async_channel::{Receiver, Sender, bounded};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::error::{KafkaError, RDKafkaErrorCode};
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::util::Timeout;
+use tracing::log::*;
+
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::time::{Duration, Instant};
+
+use crate::status::{Statistic, Stats};
 
 /**
  * KafkaMessage just carries a message and its destination topic between tasks
@@ -156,9 +158,9 @@ impl Kafka {
                  * Needed in order to prevent concurrent writers from totally
                  * killing parallel performance
                  */
-                task::yield_now().await;
+                smol::future::yield_now().await;
 
-                task::spawn(async move {
+                smol::spawn(async move {
                     let record = FutureRecord::<String, String>::to(&kmsg.topic).payload(&kmsg.msg);
                     let timeout = Timeout::After(Duration::from_secs(60));
                     /*
@@ -179,7 +181,9 @@ impl Kafka {
                             if let Ok(elapsed) = start_time.elapsed().as_micros().try_into() {
                                 let _ = stats.send((Stats::KafkaMsgSent, elapsed)).await;
                             } else {
-                                error!("Could not collect message time because the duration couldn't fit in an i64, yikes");
+                                error!(
+                                    "Could not collect message time because the duration couldn't fit in an i64, yikes"
+                                );
                             }
                         }
                         Err((err, _)) => {
@@ -213,7 +217,7 @@ impl Kafka {
                             }
                         }
                     }
-                });
+                }).detach();
             }
         }
     }

@@ -1,15 +1,19 @@
 use crate::connection::*;
 use crate::errors;
-use crate::kafka::Kafka;
 use crate::settings::Settings;
+use crate::sink::kafka::Kafka;
 use crate::status;
 /**
  * The serve module is responsible for general syslog over TCP serving functionality
  */
 use async_channel::Sender;
-use async_std::{io::BufReader, net::*, prelude::*, sync::Arc, task};
 use async_trait::async_trait;
-use log::*;
+use smol::io::BufReader;
+use smol::net::{SocketAddr, TcpListener, TcpStream};
+use smol::stream::StreamExt;
+use tracing::log::*;
+
+use std::sync::Arc;
 
 pub struct ServerState {
     /**
@@ -58,13 +62,14 @@ pub trait Server {
         debug!("Accepting from: {}", stream.peer_addr()?);
         let reader = BufReader::new(stream);
 
-        task::spawn(async move {
+        smol::spawn(async move {
             if let Err(e) = connection.read_logs(reader).await {
                 error!("Failure occurred while read_logs executed: {:?}", e);
             }
 
             let _ = stats.send((status::Stats::ConnectionCount, -1)).await;
-        });
+        })
+        .detach();
 
         Ok(())
     }
@@ -77,11 +82,7 @@ pub trait Server {
         addr: &str,
         state: ServerState,
     ) -> Result<(), errors::HotdogError> {
-        let mut addr = addr.to_socket_addrs().await?;
-        let addr = addr
-            .next()
-            .unwrap_or_else(|| panic!("Could not turn {:?} into a listenable interface", addr));
-
+        let addr: SocketAddr = addr.parse().expect("Failed to parse the listen address");
         let mut kafka = Kafka::new(state.settings.global.kafka.buffer, state.stats.clone());
 
         if !kafka.connect(
@@ -94,7 +95,7 @@ pub trait Server {
 
         let sender = kafka.get_sender();
 
-        task::spawn(async move {
+        let _task = smol::spawn(async move {
             debug!("Starting Kafka sendloop");
             kafka.sendloop().await;
         });

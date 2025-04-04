@@ -1,17 +1,13 @@
-use log::*;
+use tracing::log::*;
 
-/**
- * Enum of syslog parse related errors
- */
+/// Enum of syslog parse related errors
 #[derive(Debug)]
 pub enum SyslogErrors {
     UnknownFormat,
 }
 
-/**
- * SyslogMessage is just a wrapper struct to allow us to deserialize RFC 5424 and RFC 3164 syslog
- * messages into some format that can be passed throughout hotdog
- */
+/// SyslogMessage is just a wrapper struct to allow us to deserialize RFC 5424 and RFC 3164 syslog
+/// messages into some format that can be passed throughout hotdog
 #[derive(Debug)]
 pub struct SyslogMessage {
     pub msg: String,
@@ -21,9 +17,7 @@ pub struct SyslogMessage {
     pub appname: Option<String>,
 }
 
-/**
- * Attempt to parse a given line either as RFC 5424 or RFC 3164
- */
+/// Attempt to parse a given line either as RFC 5424 or RFC 3164
 pub fn parse_line(line: String) -> std::result::Result<SyslogMessage, SyslogErrors> {
     match syslog_rfc5424::parse_message(&line) {
         Ok(msg) => {

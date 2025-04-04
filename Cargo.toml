@@ -1,19 +1,17 @@
 [package]
 name = "hotdog"
-version = "0.5.1"
-authors = ["R. Tyler Croy <rtyler+hotdog@brokenco.de>"]
-edition = "2018"
+version = "0.6.0"
+authors = ["R. Tyler Croy <rtyler@buoyantdata.com>"]
+edition = "2024"
 
 [features]
-default = []
+default = ["simd"]
 simd = ["simd-json"]
 
 [dependencies]
-# Base asynchronous runtime
-async-std = { version = "1", features = ["attributes"] }
 async-channel = "1"
 async-trait = "0"
-futures = { version = "0.3", features = ["thread-pool"] }
+smol = "2"
 
 # Needed for listening for TLS connections
 async-tls = "0.13.0"
@@ -35,8 +33,6 @@ handlebars = "3"
 #  The "sync" feature is undocumented but required in order to swap Rc for Arc
 #  in the crate, allowing it to be used with futures and threads properly
 jmespath = { version = "0.3.0", features = ["sync"] }
-# Logging
-log = "0"
 # Faster locking primitives
 parking_lot = "0"
 pretty_env_logger = "0"
@@ -45,6 +41,11 @@ pretty_env_logger = "0"
 # including the SSL and SASL features to ensure that this can authenticate
 # against secure Kafka clusters, e.g. AWS MSK
 rdkafka = { version = "0", features = ["ssl", "sasl"]}
+
+# S3 sink
+object_store = { version = "0.12", features = ["cloud"]}
+parquet = "54.3.1"
+
 # Used for rule matching
 regex = "1"
 
@@ -59,7 +60,6 @@ serde_regex = "0"
 
 simd-json = { version = "0", optional = true}
 
-smol = "1"
 # Needed to do clever enum/derive tricks for strings
 strum = "0"
 strum_macros = "0"
@@ -73,6 +73,10 @@ tide = "0"
 
 # Needed to tag rules and actions with their own unique identifiers
 uuid = { version = "0", features = ["v4"] }
+async-task = "4.7.1"
+anyhow = "1.0.97"
+tracing = { version = "0.1.41", features = ["log"] }
+tracing-subscriber = "0.3.19"
 
 # Optimize the heck out of the release build, I have no idea what these flags
 # do

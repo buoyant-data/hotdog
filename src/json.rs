@@ -1,9 +1,5 @@
-/**
- * This module acts as a shim between serde_json and simd-json to allow for higher performance JSON
- * parsing on SIMD-capable architectures
- */
-#[cfg(feature = "simd")]
-use simd_json;
+//! This module acts as a shim between serde_json and simd-json to allow for higher performance JSON
+//! parsing on SIMD-capable architectures
 
 pub fn from_str<'a, S: serde::Deserialize<'a>>(buffer: &'a mut str) -> Result<S, std::io::Error> {
     #[cfg(feature = "simd")]
