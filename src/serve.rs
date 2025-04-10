@@ -1,7 +1,9 @@
 use crate::connection::*;
 use crate::errors;
 use crate::settings::Settings;
+use crate::sink::Sink;
 use crate::sink::kafka::Kafka;
+use crate::sink::parquet::Parquet;
 use crate::status;
 /**
  * The serve module is responsible for general syslog over TCP serving functionality
@@ -88,13 +90,9 @@ pub trait Server {
         // If the Kafka sink is defined in the configuration, then spin up the configuration
         if let Some(kafka_conf) = &state.settings.global.kafka {
             info!("Configuring a Kafka sink with: {kafka_conf:?}");
-            let mut kafka = Kafka::new(kafka_conf.buffer, state.stats.clone());
+            let mut kafka = Kafka::new(kafka_conf.clone(), state.stats.clone());
 
-            if !kafka.connect(&kafka_conf.conf, Some(kafka_conf.timeout_ms)) {
-                error!("Cannot start hotdog without a workable broker connection");
-                return Err(errors::HotdogError::KafkaConnectError);
-            }
-
+            kafka.bootstrap().await;
             sender = Some(kafka.get_sender());
 
             let _task = smol::spawn(async move {
@@ -105,6 +103,8 @@ pub trait Server {
 
         if let Some(parquet_conf) = &state.settings.global.parquet {
             info!("Configuring a Parquet sink with: {parquet_conf:?}");
+            let pq = Parquet::new(parquet_conf.clone(), state.stats.clone());
+            sender = Some(pq.get_sender());
         }
 
         let sender = sender.expect("Failed to configure a sink properly!");

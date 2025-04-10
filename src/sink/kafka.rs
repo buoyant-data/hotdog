@@ -10,33 +10,22 @@ use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::error::{KafkaError, RDKafkaErrorCode};
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::util::Timeout;
+use serde::Deserialize;
 use tracing::log::*;
 
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::time::{Duration, Instant};
 
+use super::{Message, Sink};
 use crate::status::{Statistic, Stats};
 
-/**
- * KafkaMessage just carries a message and its destination topic between tasks
- */
-#[derive(Debug)]
-pub struct KafkaMessage {
-    topic: String,
-    msg: String,
-}
-
-impl KafkaMessage {
-    pub fn new(topic: String, msg: String) -> KafkaMessage {
-        KafkaMessage { topic, msg }
-    }
-}
-
-/**
- * The Kafka struct acts as the primary interface between hotdog and Kafka
- */
+/// The Kafka [Sink] acts as the primary interface between hotdog and Kafka
+///
+/// There is no buffering of messages received, instead every single message is relayed to Kafka as
+/// it is received.
 pub struct Kafka {
+    config: Config,
     /*
      * I'm not super thrilled about wrapping the FutureProducer in an option, but it's the only way
      * that I can think to create an effective two-phase construction of this struct between
@@ -44,38 +33,36 @@ pub struct Kafka {
      */
     producer: Option<FutureProducer<DefaultClientContext>>,
     stats: Sender<Statistic>,
-    rx: Receiver<KafkaMessage>,
-    tx: Sender<KafkaMessage>,
+    rx: Receiver<Message>,
+    tx: Sender<Message>,
 }
 
-impl Kafka {
-    pub fn new(message_max: usize, stats: Sender<Statistic>) -> Kafka {
-        let (tx, rx) = bounded(message_max);
+#[async_trait::async_trait]
+impl Sink for Kafka {
+    type Config = Config;
+
+    fn new(config: Config, stats: Sender<Statistic>) -> Self {
+        let (tx, rx) = bounded(config.buffer);
         Kafka {
             producer: None,
+            config,
             stats,
             tx,
             rx,
         }
     }
 
-    /**
-     * connect() will inherently validate the configuration and perform a blocking call to the
-     * configured bootstrap.servers in order to determine whether Kafka is reachable.
-     *
-     * Assuming Kafka can be reached, the connect() call will construct the producer and return
-     * true
-     *
-     * If timeout_ms is not specified, a default 10s timeout will be used
-     */
-    pub fn connect(
-        &mut self,
-        rdkafka_conf: &HashMap<String, String>,
-        timeout_ms: Option<Duration>,
-    ) -> bool {
+    /// get_sender() will return a cloned reference to the sender suitable for tasks or threads to
+    /// consume and take ownership of
+    fn get_sender(&self) -> Sender<Message> {
+        self.tx.clone()
+    }
+
+    async fn bootstrap(&mut self) {
+        debug!("Bootstrapping the Kafka sink");
         let mut rd_conf = ClientConfig::new();
 
-        for (key, value) in rdkafka_conf.iter() {
+        for (key, value) in self.config.conf.iter() {
             rd_conf.set(key, value);
         }
 
@@ -100,12 +87,7 @@ impl Kafka {
             .create()
             .expect("Creation of Kafka consumer (for metadata) failed");
 
-        let timeout = match timeout_ms {
-            Some(ms) => ms,
-            None => Duration::from_secs(10),
-        };
-
-        if let Ok(metadata) = consumer.fetch_metadata(None, timeout) {
+        if let Ok(metadata) = consumer.fetch_metadata(None, self.config.timeout_ms) {
             debug!("  Broker count: {}", metadata.brokers().len());
             debug!("  Topics count: {}", metadata.topics().len());
             debug!("  Metadata broker name: {}", metadata.orig_broker_name());
@@ -116,27 +98,18 @@ impl Kafka {
                     .create()
                     .expect("Failed to create the Kafka producer!"),
             );
-
-            return true;
         }
 
-        warn!("Failed to connect to a Kafka broker");
-
-        false
+        panic!("Failed to connect to a Kafka broker: {:?}", self.config);
     }
+}
 
-    /**
-     * get_sender() will return a cloned reference to the sender suitable for tasks or threads to
-     * consume and take ownership of
-     */
-    pub fn get_sender(&self) -> Sender<KafkaMessage> {
-        self.tx.clone()
-    }
-
+impl Kafka {
     /**
      * sendloop should be called in a thread/task and will never return
      */
     pub async fn sendloop(&self) -> ! {
+        debug!("Entering the sendloop");
         if self.producer.is_none() {
             panic!("Cannot enter the sendloop() without a valid producer");
         }
@@ -161,7 +134,7 @@ impl Kafka {
                 smol::future::yield_now().await;
 
                 smol::spawn(async move {
-                    let record = FutureRecord::<String, String>::to(&kmsg.topic).payload(&kmsg.msg);
+                    let record = FutureRecord::<String, String>::to(&kmsg.destination).payload(&kmsg.payload);
                     let timeout = Timeout::After(Duration::from_secs(60));
                     /*
                      * Intentionally setting the timeout_ms to -1 here so this blocks forever if the
@@ -172,7 +145,7 @@ impl Kafka {
                     match producer.send(record, timeout).await {
                         Ok(_) => {
                             let _ = stats
-                                .send((Stats::KafkaMsgSubmitted { topic: kmsg.topic }, 1))
+                                .send((Stats::KafkaMsgSubmitted { topic: kmsg.destination }, 1))
                                 .await;
                             /*
                              * dipstick only supports u64 timers anyways, but as_micros() can
@@ -223,15 +196,36 @@ impl Kafka {
     }
 }
 
-/**
- * A simple function for formatting the generated strings from RDKafkaError to be useful as metric
- * names for systems like statsd
- */
+/// A simple function for formatting the generated strings from RDKafkaError to be useful as metric
+/// names for systems like statsd
 fn metric_name_for(err: RDKafkaErrorCode) -> String {
     if let Some(name) = err.to_string().to_lowercase().split(' ').next() {
         return name.to_string();
     }
     String::from("unknown")
+}
+
+/// Configuration struct for the hotdog configuration file.
+///
+/// This will be used by the settings parsing to configur a [Kafka] sink when present
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Config {
+    #[serde(default = "kafka_buffer_default")]
+    pub buffer: usize,
+    #[serde(default = "kafka_timeout_default")]
+    pub timeout_ms: Duration,
+    pub conf: HashMap<String, String>,
+    pub topic: String,
+}
+
+/// Return the default size used for the Kafka buffer
+fn kafka_buffer_default() -> usize {
+    1024
+}
+
+/// Return the default timeout for Kafka operations
+fn kafka_timeout_default() -> Duration {
+    Duration::from_secs(30)
 }
 
 #[cfg(test)]
@@ -242,6 +236,7 @@ mod tests {
      * Test that trying to connect to a nonexistent cluster returns false
      */
     #[test]
+    #[should_panic]
     fn test_connect_bad_cluster() {
         let mut conf = HashMap::<String, String>::new();
         conf.insert(
@@ -249,9 +244,11 @@ mod tests {
             String::from("example.com:9092"),
         );
         let (unused_sender, _) = bounded(1);
+        let mut config = Config::default();
+        config.buffer = 1;
 
-        let mut k = Kafka::new(1, unused_sender);
-        assert_eq!(false, k.connect(&conf, Some(Duration::from_secs(1))));
+        let mut k = Kafka::new(config, unused_sender);
+        smol::block_on(k.bootstrap());
     }
 
     /**

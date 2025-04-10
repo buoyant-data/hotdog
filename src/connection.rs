@@ -15,7 +15,7 @@ use crate::merge;
 use crate::parse;
 use crate::rules;
 use crate::settings::*;
-use crate::sink::kafka::KafkaMessage;
+use crate::sink::Message;
 use crate::status::{Statistic, Stats};
 
 /// RuleState exists to help carry state into merge/replacement functions and exists only during the
@@ -34,16 +34,12 @@ pub struct Connection {
     settings: Arc<Settings>,
     /// The sender-side of the channel to our Kafka connection, allowing the logs read in to be
     /// sent over to the Kafka handler
-    sender: Sender<KafkaMessage>,
+    sender: Sender<Message>,
     stats: Sender<Statistic>,
 }
 
 impl Connection {
-    pub fn new(
-        settings: Arc<Settings>,
-        sender: Sender<KafkaMessage>,
-        stats: Sender<Statistic>,
-    ) -> Self {
+    pub fn new(settings: Arc<Settings>, sender: Sender<Message>, stats: Sender<Statistic>) -> Self {
         Connection {
             settings,
             sender,
@@ -186,7 +182,7 @@ impl Connection {
                                  * `output` is consumed by send_to_kafka, so the rest of the rules
                                  * should be skipped.
                                  */
-                                let kmsg = KafkaMessage::new(actual_topic, output);
+                                let kmsg = Message::new(actual_topic, output);
                                 let _ = self.sender.send(kmsg).await;
                                 /*
                                  * Ensure that we're allowing other tasks to execute when we pass

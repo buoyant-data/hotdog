@@ -1,14 +1,10 @@
-/**
- * The settings module contains the necessary structs and code to process the
- * hotdog.yml file format
- */
+//! The settings module contains the necessary structs and code to process the
+//! hotdog.yml file format
 use serde_json::Value;
 use tracing::log::*;
 use uuid::Uuid;
 
-use std::collections::HashMap;
 use std::path::Path;
-use std::time::Duration;
 
 pub fn load(file: &str) -> Settings {
     let conf = load_configuration(file);
@@ -143,29 +139,6 @@ pub struct Listen {
     pub tls: TlsType,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct Kafka {
-    #[serde(default = "kafka_buffer_default")]
-    pub buffer: usize,
-    #[serde(default = "kafka_timeout_default")]
-    pub timeout_ms: Duration,
-    pub conf: HashMap<String, String>,
-    pub topic: String,
-}
-
-/// Configuration for Parquet sink
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-pub struct Parquet {
-    /// Expected to be an S3 compatible URL
-    pub url: url::Url,
-    /// Minimum number of log lines to buffer into each parquet file
-    #[serde(default = "parquet_buffer_default")]
-    pub buffer: usize,
-    /// Duration in milliseconds before a flush to storage should happen
-    #[serde(default = "parquet_flush_default")]
-    pub flush_ms: usize,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct Metrics {
     pub statsd: String,
@@ -179,8 +152,8 @@ pub struct Status {
 
 #[derive(Debug, Deserialize)]
 pub struct Global {
-    pub kafka: Option<Kafka>,
-    pub parquet: Option<Parquet>,
+    pub kafka: Option<crate::sink::kafka::Config>,
+    pub parquet: Option<crate::sink::parquet::Config>,
     pub listen: Listen,
     pub metrics: Metrics,
     pub status: Option<Status>,
@@ -201,25 +174,6 @@ impl Settings {
             rule.populate_caches();
         });
     }
-}
-
-/// Return the default size used for the Kafka buffer
-fn kafka_buffer_default() -> usize {
-    1024
-}
-
-/// Default number of log lines per parquet file
-fn parquet_buffer_default() -> usize {
-    1_000_000
-}
-
-/// Default [Duration] before a Parquet sink flush
-fn parquet_flush_default() -> usize {
-    120
-}
-
-fn kafka_timeout_default() -> Duration {
-    Duration::from_secs(30)
 }
 
 fn default_none<T>() -> Option<T> {
@@ -261,11 +215,6 @@ mod tests {
     #[test]
     fn test_default_tls() {
         assert_eq!(TlsType::None, TlsType::default());
-    }
-
-    #[test]
-    fn test_kafka_buffer_default() {
-        assert_eq!(1024, kafka_buffer_default());
     }
 
     #[test]

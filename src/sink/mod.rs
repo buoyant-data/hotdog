@@ -3,7 +3,12 @@
 //! This is not meant to be a robust rich system, like Vector, but just something simplistic to
 //! serve syslog only
 
+use async_channel::Sender;
+
+use crate::status::Statistic;
+
 pub mod kafka;
+pub mod parquet;
 
 ///
 /// The Sink trait is a simple interface for defining a thing that takes a bunch of rows and
@@ -14,28 +19,43 @@ pub mod kafka;
 /// code the same, the Sink trait is needed.
 ///
 #[async_trait::async_trait]
-pub trait Sink: Default {
+pub trait Sink: Send + Sync {
     type Config;
 
     /// Construct the Sink.
     ///
     /// This function should not do anything but initialize settings and variables
-    fn new(config: Self::Config) -> Self;
+    fn new(config: Self::Config, stats: Sender<Statistic>) -> Self;
 
     /// Bootstrap the sink
     ///
     /// This function is asynchronous and takes ownership of the Sink and then gives it back. It
     /// may modify the [Sink] during its execution if necessary
-    async fn bootstrap(self) -> Self {
-        self
-    }
-
-    /// Shutdown the sink
     ///
-    /// This function may perform closing actions to flush buffers, etc on the [Sink] before it
-    /// is to be cleaned up.
-    async fn shutdown(self) -> Self {
-        self
+    /// This must be mutable to allow implementers of this trait update any internal data as part
+    /// of a two-stage initialization (i.e. connection) process
+    async fn bootstrap(&mut self) {}
+
+    /// Return a [Sender] which is capable of communicating with the [Sink]
+    fn get_sender(&self) -> Sender<Message>;
+}
+
+/// The [Message] struct is used for bringing messages between the receivers and the sinks that
+/// will ultimately output them.
+///
+/// THe `destination` may interpreted differently depending on the [Sink]!
+#[derive(Clone, Debug, Default)]
+pub struct Message {
+    destination: String,
+    payload: String,
+}
+
+impl Message {
+    pub fn new(destination: String, payload: String) -> Self {
+        Message {
+            destination,
+            payload,
+        }
     }
 }
 
@@ -51,8 +71,13 @@ mod tests {
     impl Sink for TestSink {
         type Config = Option<()>;
 
-        fn new(config: Option<()>) -> Self {
+        fn new(config: Option<()>, _stats: Sender<Statistic>) -> Self {
             Self { config }
+        }
+
+        fn get_sender(&self) -> Sender<Message> {
+            let (tx, _rx) = async_channel::bounded(1);
+            tx
         }
     }
 
