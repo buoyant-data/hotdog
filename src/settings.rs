@@ -143,7 +143,7 @@ pub struct Listen {
     pub tls: TlsType,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Kafka {
     #[serde(default = "kafka_buffer_default")]
     pub buffer: usize,
@@ -151,6 +151,19 @@ pub struct Kafka {
     pub timeout_ms: Duration,
     pub conf: HashMap<String, String>,
     pub topic: String,
+}
+
+/// Configuration for Parquet sink
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct Parquet {
+    /// Expected to be an S3 compatible URL
+    pub url: url::Url,
+    /// Minimum number of log lines to buffer into each parquet file
+    #[serde(default = "parquet_buffer_default")]
+    pub buffer: usize,
+    /// Duration in milliseconds before a flush to storage should happen
+    #[serde(default = "parquet_flush_default")]
+    pub flush_ms: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -166,7 +179,8 @@ pub struct Status {
 
 #[derive(Debug, Deserialize)]
 pub struct Global {
-    pub kafka: Kafka,
+    pub kafka: Option<Kafka>,
+    pub parquet: Option<Parquet>,
     pub listen: Listen,
     pub metrics: Metrics,
     pub status: Option<Status>,
@@ -194,6 +208,16 @@ fn kafka_buffer_default() -> usize {
     1024
 }
 
+/// Default number of log lines per parquet file
+fn parquet_buffer_default() -> usize {
+    1_000_000
+}
+
+/// Default [Duration] before a Parquet sink flush
+fn parquet_flush_default() -> usize {
+    120
+}
+
 fn kafka_timeout_default() -> Duration {
     Duration::from_secs(30)
 }
@@ -216,6 +240,11 @@ mod tests {
     }
 
     #[test]
+    fn test_load_parquet_config() {
+        load("hotdog-parquet.yml");
+    }
+
+    #[test]
     fn test_load_example_and_populate_caches() {
         let settings = load("test/configs/single-rule-with-merge.yml");
         assert_eq!(settings.rules.len(), 1);
@@ -224,7 +253,7 @@ mod tests {
                 assert!(json_str.is_some());
             }
             _ => {
-                assert!(false);
+                unreachable!("This shouldn't have happened");
             }
         }
     }

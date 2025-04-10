@@ -1,0 +1,64 @@
+# Example hotdog configuration with the Parquet sink.
+#
+# This is mutually exclusive from the Kafka sink, so they cannot be
+# simultaneously configured!
+---
+global:
+  listen:
+    address: '127.0.0.1'
+    port: 6514
+    tls:
+      cert: './contrib/cert.pem'
+      key: './contrib/cert-key.pem'
+    # Swap these values out in order to listen for plaintext syslog
+    #port: 1514
+  parquet:
+    url: 's3://bucket/prefix'
+    buffer: 1000
+    flush_ms: 60000
+  metrics:
+    statsd: 'localhost:8125'
+
+rules:
+  - regex: '^hello\s+(?P<name>\w+)?'
+    # NOTE: field must currently be `msg`, applying rules on other fields is
+    # not yet supported
+    field: msg
+    actions:
+      - type: replace
+        template: |
+          This is the total message: {{msg}}
+
+          And the name is: {{name}}
+
+      - type: forward
+        topic: test
+
+      # We don't want any other rules to try to consume these messages
+      - type: stop
+
+  # Match JSON content which has a meta.topic value, e.g.
+  #   {"meta":{"topic" : "foo"}}
+  - jmespath: 'meta.topic'
+    field: msg
+    actions:
+      - type: merge
+        json:
+          meta:
+            hotdog:
+              version: '{{version}}'
+              timestamp: '{{iso8601}}'
+
+      - type: forward
+        topic: '{{value}}'
+
+      - type: stop
+
+  # Catch-all, send everything else to a "logs-unknown" topic
+  - regex: '.*'
+    field: msg
+    actions:
+      - type: forward
+        topic: 'logs-unknown'
+
+      - type: stop

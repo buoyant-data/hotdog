@@ -83,11 +83,9 @@ async fn run() -> Result<(), errors::HotdogError> {
         stats.runloop().await;
     });
 
-    /* TODO
     if let Some(test_file) = matches.value_of("test") {
         return rules::test_rules(test_file, settings).await;
     }
-    */
 
     let addr = format!(
         "{}:{}",

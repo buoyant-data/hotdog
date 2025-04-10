@@ -83,22 +83,31 @@ pub trait Server {
         state: ServerState,
     ) -> Result<(), errors::HotdogError> {
         let addr: SocketAddr = addr.parse().expect("Failed to parse the listen address");
-        let mut kafka = Kafka::new(state.settings.global.kafka.buffer, state.stats.clone());
+        let mut sender = None;
 
-        if !kafka.connect(
-            &state.settings.global.kafka.conf,
-            Some(state.settings.global.kafka.timeout_ms),
-        ) {
-            error!("Cannot start hotdog without a workable broker connection");
-            return Err(errors::HotdogError::KafkaConnectError);
+        // If the Kafka sink is defined in the configuration, then spin up the configuration
+        if let Some(kafka_conf) = &state.settings.global.kafka {
+            info!("Configuring a Kafka sink with: {kafka_conf:?}");
+            let mut kafka = Kafka::new(kafka_conf.buffer, state.stats.clone());
+
+            if !kafka.connect(&kafka_conf.conf, Some(kafka_conf.timeout_ms)) {
+                error!("Cannot start hotdog without a workable broker connection");
+                return Err(errors::HotdogError::KafkaConnectError);
+            }
+
+            sender = Some(kafka.get_sender());
+
+            let _task = smol::spawn(async move {
+                debug!("Starting Kafka sendloop");
+                kafka.sendloop().await;
+            });
         }
 
-        let sender = kafka.get_sender();
+        if let Some(parquet_conf) = &state.settings.global.parquet {
+            info!("Configuring a Parquet sink with: {parquet_conf:?}");
+        }
 
-        let _task = smol::spawn(async move {
-            debug!("Starting Kafka sendloop");
-            kafka.sendloop().await;
-        });
+        let sender = sender.expect("Failed to configure a sink properly!");
 
         self.bootstrap(&state)?;
 
