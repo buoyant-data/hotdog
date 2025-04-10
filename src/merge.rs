@@ -1,5 +1,5 @@
 // Disabling this lint because I don't want to fix it in this imported code
-#![allow(clippy::clone_double_ref)]
+#![allow(suspicious_double_ref_op)]
 /**
  * This module is from the crate json_value_merge
  *  <https://github.com/jmfiaschi/json_value_merge/>
@@ -66,16 +66,16 @@ impl Merge for serde_json::Value {
 
 pub fn merge(a: &mut Value, b: &Value) {
     match (a, b) {
-        (&mut Value::Object(ref mut a), &Value::Object(ref b)) => {
+        (&mut Value::Object(ref mut a), Value::Object(b)) => {
             for (k, v) in b {
                 merge(a.entry(k.clone()).or_insert(Value::Null), v);
             }
         }
-        (&mut Value::Array(ref mut a), &Value::Array(ref b)) => {
+        (&mut Value::Array(ref mut a), Value::Array(b)) => {
             a.extend(b.clone());
             a.dedup();
         }
-        (&mut Value::Array(ref mut a), &Value::Object(ref b)) => {
+        (&mut Value::Array(ref mut a), Value::Object(b)) => {
             a.push(Value::Object(b.clone()));
             a.dedup();
         }

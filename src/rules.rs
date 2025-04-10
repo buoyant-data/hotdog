@@ -95,11 +95,9 @@ pub fn apply_rule(
         if let Some(captures) = regex.captures(value) {
             rule_matches = true;
 
-            for name in regex.capture_names() {
-                if let Some(name) = name {
-                    if let Some(value) = captures.name(name) {
-                        hash.insert(name.to_string(), String::from(value.as_str()));
-                    }
+            for name in regex.capture_names().flatten() {
+                if let Some(value) = captures.name(name) {
+                    hash.insert(name.to_string(), String::from(value.as_str()));
                 }
             }
         }

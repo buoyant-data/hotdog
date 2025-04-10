@@ -9,7 +9,7 @@ use crate::status;
 use async_channel::Sender;
 use async_tls::TlsAcceptor;
 use rustls::server::ServerConfig;
-use rustls::{Certificate, PrivateKey, RootCertStore};
+use rustls::{Certificate, PrivateKey};
 use smol::io::BufReader;
 use smol::net::TcpStream;
 use tracing::log::*;

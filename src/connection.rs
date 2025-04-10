@@ -1,5 +1,5 @@
-///! The connection module is responsible for handling everything pertaining to a single inbound TCP
-///! connection.
+//! The connection module is responsible for handling everything pertaining to a single inbound TCP
+//! connection.
 use async_channel::Sender;
 use chrono::prelude::*;
 use handlebars::Handlebars;
@@ -180,7 +180,7 @@ impl Connection {
                                 output = String::from(&msg.msg);
                             }
 
-                            if let Ok(actual_topic) = hb.render_template(&topic, &hash) {
+                            if let Ok(actual_topic) = hb.render_template(topic, &hash) {
                                 debug!("Enqueueing for topic: `{}`", actual_topic);
                                 /*
                                  * `output` is consumed by send_to_kafka, so the rest of the rules

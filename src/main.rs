@@ -1,4 +1,4 @@
-///! Hotdog's main entrypoint
+//! Hotdog's main entrypoint
 #[macro_use]
 extern crate serde_derive;
 #[cfg(feature = "simd")]
