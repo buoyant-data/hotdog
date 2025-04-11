@@ -29,6 +29,14 @@ use serve::*;
 use settings::*;
 
 fn main() -> Result<(), errors::HotdogError> {
+    use std::panic;
+    // take_hook() returns the default hook in case when a custom one is not set
+    let orig_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
+        // invoke the default handler and exit the process
+        orig_hook(panic_info);
+        std::process::exit(1);
+    }));
     smol::block_on(run())
 }
 
