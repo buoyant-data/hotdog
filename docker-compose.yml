@@ -1,5 +1,4 @@
 ---
-version: '3'
 services:
   kafka:
     image: docker.redpanda.com/redpandadata/redpanda:v25.1.1
@@ -38,16 +37,31 @@ services:
       retries: 10
     # Requires docker-compose 2.30 or later
     post_start:
-      - command: rpk topic create test logs-unknown
+      - command: /bin/bash -c "rpk topic create test logs-unknown || true"
 
-  localstack:
-    image: localstack/localstack:0.13.1
+  minio:
+    image: quay.io/minio/minio
+    command:
+      - server
+      - /data
     ports:
-      - "4566:4566"
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - ./test/bucket:/data
     environment:
-      - SERVICES=s3
-      - DATA_DIR=/tmp/localstack/data
-      - DOCKER_HOST=unix:///var/run/docker.sock
-      - HOST_TMP_FOLDER=${TMPDIR}
+      - MINIO_ROOT_USER=hotdog
+      - MINIO_ROOT_PASSWORD=hotdoggin
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:4566/health" ]
+      test: ["CMD", "curl", "http://localhost:9000"]
+      interval: 1s
+      timeout: 1s
+      retries: 10
+
+  mc:
+    image: quay.io/minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: |
+      /bin/bash -c "mc alias set minio http://minio:9000/ hotdog hotdoggin && mc mb minio/hotdog"
