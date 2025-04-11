@@ -103,13 +103,8 @@ impl Sink for Kafka {
 
         panic!("Failed to connect to a Kafka broker: {:?}", self.config);
     }
-}
 
-impl Kafka {
-    /**
-     * sendloop should be called in a thread/task and will never return
-     */
-    pub async fn sendloop(&self) -> ! {
+    async fn runloop(&self) {
         debug!("Entering the sendloop");
         if self.producer.is_none() {
             panic!("Cannot enter the sendloop() without a valid producer");

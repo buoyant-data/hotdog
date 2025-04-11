@@ -38,6 +38,12 @@ pub trait Sink: Send + Sync {
 
     /// Return a [Sender] which is capable of communicating with the [Sink]
     fn get_sender(&self) -> Sender<Message>;
+
+    /// Runloop which should be spawned into its own task for the sink to perform its consumption
+    /// duties.
+    ///
+    /// This function should be spun into its own task and panic if anything goes wrong.
+    async fn runloop(&self);
 }
 
 /// The [Message] struct is used for bringing messages between the receivers and the sinks that
@@ -68,6 +74,7 @@ mod tests {
         config: Option<()>,
     }
 
+    #[async_trait::async_trait]
     impl Sink for TestSink {
         type Config = Option<()>;
 
@@ -78,6 +85,10 @@ mod tests {
         fn get_sender(&self) -> Sender<Message> {
             let (tx, _rx) = async_channel::bounded(1);
             tx
+        }
+
+        async fn runloop(&self) {
+            unreachable!("This should never be invoked in tests");
         }
     }
 

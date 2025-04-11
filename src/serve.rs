@@ -96,8 +96,8 @@ pub trait Server {
             sender = Some(kafka.get_sender());
 
             smol::spawn(async move {
-                debug!("Starting Kafka sendloop");
-                kafka.sendloop().await;
+                debug!("Starting Kafka loop");
+                kafka.runloop().await;
             })
             .detach();
         }
@@ -106,6 +106,11 @@ pub trait Server {
             info!("Configuring a Parquet sink with: {parquet_conf:?}");
             let pq = Parquet::new(parquet_conf.clone(), state.stats.clone());
             sender = Some(pq.get_sender());
+            smol::spawn(async move {
+                debug!("Starting Parquet loop");
+                pq.runloop().await;
+            })
+            .detach();
         }
 
         let sender = sender.expect("Failed to configure a sink properly!");

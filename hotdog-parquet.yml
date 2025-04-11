@@ -14,7 +14,8 @@ global:
     #port: 1514
   parquet:
     url: 's3://bucket/prefix'
-    buffer: 1000
+    # Bytes to buffer
+    buffer: 1024
     flush_ms: 60000
   metrics:
     statsd: 'localhost:8125'
