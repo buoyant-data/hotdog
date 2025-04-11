@@ -95,10 +95,11 @@ pub trait Server {
             kafka.bootstrap().await;
             sender = Some(kafka.get_sender());
 
-            let _task = smol::spawn(async move {
+            smol::spawn(async move {
                 debug!("Starting Kafka sendloop");
                 kafka.sendloop().await;
-            });
+            })
+            .detach();
         }
 
         if let Some(parquet_conf) = &state.settings.global.parquet {

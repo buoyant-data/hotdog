@@ -98,6 +98,7 @@ impl Sink for Kafka {
                     .create()
                     .expect("Failed to create the Kafka producer!"),
             );
+            return;
         }
 
         panic!("Failed to connect to a Kafka broker: {:?}", self.config);

@@ -184,6 +184,7 @@ impl Connection {
                                  */
                                 let kmsg = Message::new(actual_topic, output);
                                 let _ = self.sender.send(kmsg).await;
+                                debug!("Sent message to internal channel for dispatch to sink");
                                 /*
                                  * Ensure that we're allowing other tasks to execute when we pass
                                  * things off to the channel
