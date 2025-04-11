@@ -1,6 +1,6 @@
 [package]
 name = "hotdog"
-version = "0.6.0"
+version = "1.0.0"
 authors = ["R. Tyler Croy <rtyler@buoyantdata.com>"]
 edition = "2024"
 
@@ -10,11 +10,13 @@ simd = ["simd-json"]
 
 [dependencies]
 async-channel = "1"
+# Needed for running tokio reactors on smol, primarily for object_store
+async-compat = "0.2.4"
 async-trait = "0"
-smol = "2"
-
 # Needed for listening for TLS connections
 async-tls = "0.13.0"
+smol = "2"
+
 rustls = "0.21"
 rustls-pemfile = "1.0"
 
@@ -44,7 +46,9 @@ rdkafka = { version = "0", features = ["ssl", "sasl"]}
 
 # S3 sink
 object_store = { version = "0.12", features = ["aws", "cloud"] }
-parquet = "54.3.1"
+arrow-array = "55"
+arrow-json = "55"
+parquet = { version = "55", features = ["arrow", "async", "object_store"]}
 
 # Used for rule matching
 regex = "1"
@@ -73,7 +77,6 @@ tide = "0"
 
 # Needed to tag rules and actions with their own unique identifiers
 uuid = { version = "0", features = ["v4"] }
-async-task = "4.7.1"
 anyhow = "1.0.97"
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-subscriber = "0.3.19"

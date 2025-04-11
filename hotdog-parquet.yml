@@ -13,9 +13,9 @@ global:
     # Swap these values out in order to listen for plaintext syslog
     #port: 1514
   parquet:
-    url: 's3://bucket/prefix'
+    url: 's3://hotdog/streams/'
     # Bytes to buffer
-    buffer: 1024
+    buffer: 128
     flush_ms: 60000
   metrics:
     statsd: 'localhost:8125'

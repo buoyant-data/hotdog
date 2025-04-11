@@ -105,9 +105,9 @@ impl Sink for Kafka {
     }
 
     async fn runloop(&self) {
-        debug!("Entering the sendloop");
+        debug!("Entering the Kafka runloop");
         if self.producer.is_none() {
-            panic!("Cannot enter the sendloop() without a valid producer");
+            panic!("Cannot enter the runloop() without a valid producer");
         }
 
         let producer = self.producer.as_ref().unwrap();

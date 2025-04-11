@@ -1,0 +1,8 @@
+#!/bin/sh -xe
+export endpoint_url=http://localhost:9000
+export aws_allow_http=true
+export access_key_id=hotdog
+export secret_access_key=hotdoggin
+export RUST_LOG=debug
+
+exec cargo run -- -c hotdog-parquet.yml

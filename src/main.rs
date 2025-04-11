@@ -47,8 +47,8 @@ async fn run() -> Result<(), errors::HotdogError> {
 
     let matches = App::new("Hotdog")
         .version(env!("CARGO_PKG_VERSION"))
-        .author("R Tyler Croy <rtyler+hotdog@brokenco.de")
-        .about("Forward syslog over to Kafka with ease")
+        .author("R Tyler Croy <rtyler@buoyantdata.com>")
+        .about("Forward syslog with ease")
         .arg(
             Arg::with_name("config")
                 .short("c")

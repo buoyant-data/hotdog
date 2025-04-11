@@ -30,9 +30,9 @@ toc::[]
 
 [source,bash]
 ----
-Hotdog 0.1.0
-R Tyler Croy <rtyler+hotdog@brokenco.de
-Forward syslog over to Kafka with ease
+Hotdog 1.0.0
+R Tyler Croy <rtyler@buoyantdata.com>
+Forward syslog with ease
 
 USAGE:
     hotdog [OPTIONS]
@@ -62,8 +62,15 @@ sudo apt-get install libsasl2-2
 .openSUSE
 [source,bash]
 ----
-sudo zypper install libsasl2-3
+sudo zypper install cyrus-sasl-devel
 ----
+
+[[performance]]
+=== Performance
+
+By default `hotdog` will run with a single background thread for processing
+incoming messages. It is recommended to set `SMOL_THREADS` to the number of
+CPUs which should be utilized on the machine.
 
 [[configuration]]
 == Configuration
