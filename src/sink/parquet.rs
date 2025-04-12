@@ -13,11 +13,13 @@ use object_store::ObjectStore;
 use parquet::arrow::async_writer::{AsyncArrowWriter, ParquetObjectWriter};
 use smol::stream::StreamExt;
 use tracing::log::*;
+use tracing::{Level, span};
 use uuid::Uuid;
 
 use std::collections::HashMap;
 use std::io::{Cursor, Seek, Write};
 use std::sync::Arc;
+use std::time::Instant;
 
 /// Alias for convenience in refering to reference counted [ObjectStore]
 type ObjectStoreRef = Arc<dyn ObjectStore>;
@@ -62,24 +64,35 @@ impl Sink for Parquet {
     }
 
     async fn runloop(&self) {
+        // Converting this at the beginning of the function to ensure that it doesn't need to be
+        // done in the loop and if the configuration is invalid then the sink fails as early as
+        // possible
+        let flush_ms: u128 = self
+            .config
+            .flush_ms
+            .try_into()
+            .expect("Failed to convert the flush_ms to a 128 bit integer");
+
         debug!("Entering the Parquet sink runloop");
         smol::block_on(Compat::new(async {
-            debug!("Listing the bucket as a sanity check");
+            info!("Listing the bucket as a sanity check: {}", self.config.url);
             let mut list_stream = self.store.list(None);
 
             // Print a line about each object
-            while let Some(meta) = list_stream.next().await.transpose().unwrap() {
-                info!("Name: {}, size: {}", meta.location, meta.size);
+            if let Some(meta) = list_stream.next().await.transpose().unwrap() {
+                debug!("Name: {}, size: {}", meta.location, meta.size);
             }
             debug!("Finished listing the bucket");
         }));
 
         let mut buffer: HashMap<String, Vec<String>> = HashMap::default();
         let mut bufsizes: HashMap<String, usize> = HashMap::default();
+        let mut since_last_flush = Instant::now();
 
         loop {
             if let Ok(msg) = self.rx.recv().await {
                 debug!("Buffering this message for Parquet output: {msg:?}");
+                let _span = span!(Level::INFO, "Parquet sink recv");
 
                 if !buffer.contains_key(&msg.destination) {
                     buffer.insert(msg.destination.clone(), vec![]);
@@ -97,14 +110,17 @@ impl Sink for Parquet {
                     );
                     queue.push(msg.payload);
 
-                    if *bufsize > self.config.buffer {
+                    if (since_last_flush.elapsed().as_millis() > flush_ms)
+                        || (*bufsize > self.config.buffer)
+                    {
                         debug!(
                             "Reached the threshold to flush bytes for `{}`",
                             &msg.destination
                         );
                         if let Some(buf) = buffer.remove(&msg.destination) {
-                            // TODO: remove to_vec
+                            let _flush_span = span!(Level::INFO, "Parquet flush");
                             flush_to_parquet(self.store.clone(), &msg.destination, buf);
+                            since_last_flush = Instant::now();
                         }
                     }
                 }
@@ -140,6 +156,7 @@ fn flush_to_parquet(store: ObjectStoreRef, destination: &str, buffer: Vec<String
             .write_all(line.as_bytes())
             .expect("Failed to write all bytes into the buffer");
     }
+
     // Rewind for the reader
     let _ = buf_read.rewind();
 
@@ -147,11 +164,14 @@ fn flush_to_parquet(store: ObjectStoreRef, destination: &str, buffer: Vec<String
     let mut reader = ReaderBuilder::new(schema.clone())
         .build(buf_read)
         .expect("Failed to build the JSON decoder");
+
     let output =
         object_store::path::Path::from(format!("{destination}/{}.parquet", Uuid::new_v4()));
+
     let object_writer = ParquetObjectWriter::new(store.clone(), output.clone());
     let mut writer = AsyncArrowWriter::try_new(object_writer, schema.clone(), None)
         .expect("Failed to build AsyncArrowWriter");
+
     smol::block_on(Compat::new(async {
         while let Some(Ok(batch)) = reader.next() {
             writer.write(&batch).await.expect("Failed to write a batch");
@@ -179,9 +199,9 @@ fn parquet_buffer_default() -> usize {
     1_024 * 1_024 * 100
 }
 
-/// Default [Duration] before a Parquet sink flush
+/// Default milliseconds before a Parquet sink flush
 fn parquet_flush_default() -> usize {
-    120
+    1000 * 10
 }
 
 #[cfg(test)]
