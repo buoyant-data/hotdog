@@ -4,7 +4,7 @@
 pub fn from_str<'a, S: serde::Deserialize<'a>>(buffer: &'a mut str) -> Result<S, std::io::Error> {
     #[cfg(feature = "simd")]
     unsafe {
-        simd_json::serde::from_str::<S>(buffer)
+        simd_json::serde::from_slice::<S>(buffer.as_bytes_mut())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
     }
 

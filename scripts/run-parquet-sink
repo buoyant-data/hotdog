@@ -7,4 +7,12 @@ export RUST_LOG=info
 export SMOL_THREADS=4
 
 #exec cargo run --release -- -c hotdog-parquet.yml
-perf record --call-graph dwarf -- ./target/debug/hotdog -c ./hotdog-parquet.yml
+#perf record --call-graph dwarf -- ./target/debug/hotdog -c ./hotdog-parquet.yml
+perf record \
+    -e cycles \
+    --switch-events \
+    --sample-cpu \
+    -m 8M \
+    --aio \
+    --call-graph dwarf \
+    -- ./target/debug/hotdog -c ./hotdog-parquet.yml

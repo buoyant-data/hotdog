@@ -30,7 +30,7 @@ dashmap = "3"
 # Needed to report metrics of hotdog's performance
 dipstick = "0"
 # Used for string replacements and other template based transformations
-handlebars = "3"
+handlebars = "6"
 # used for rule matching on JSON
 #  The "sync" feature is undocumented but required in order to swap Rc for Arc
 #  in the crate, allowing it to be used with futures and threads properly
@@ -81,6 +81,8 @@ anyhow = "1.0.97"
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-subscriber = "0.3.19"
 url = { version = "2.5.4", features = ["serde"] }
+ctrlc = "3.4.6"
+affinity = "0.1.2"
 
 # Optimize the heck out of the release build, I have no idea what these flags
 # do

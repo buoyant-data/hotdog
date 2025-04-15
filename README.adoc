@@ -523,8 +523,15 @@ Profiling `hotdog` is best done on a Linux host with the `perf` tool, e.g.
 [source,bash]
 ----
 RUST_LOG=info perf record --call-graph dwarf -- ./target/debug/hotdog -c ./hotdog.yml
-perf report -ng
+perf report -ng --no-inline
 ----
+
+By default this may run with a single thread, to increase the parallelism of
+:hotdog: while profiling, be sure to use the `SMOL_THREADS` environment
+variable.
+
+The [hotspot](https://github.com/KDAB/hotspot) profiler visualizer tool works
+well with the generated repors.
 
 == Similar Projects
 

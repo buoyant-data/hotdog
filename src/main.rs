@@ -28,7 +28,11 @@ mod status;
 use serve::*;
 use settings::*;
 
+/// Non-async entrypoint which will set up the logger and launch the main smol task
 fn main() -> Result<(), errors::HotdogError> {
+    pretty_env_logger::init();
+    info!("Starting hotdog version {}", env!["CARGO_PKG_VERSION"]);
+
     use std::panic;
     // take_hook() returns the default hook in case when a custom one is not set
     let orig_hook = panic::take_hook();
@@ -40,11 +44,45 @@ fn main() -> Result<(), errors::HotdogError> {
     smol::block_on(run())
 }
 
+/// This function pins the running smol threads to cores to reduce the potential context switching
+/// and cache misses when processing data as threads are spread around. This _may_ be a premature
+/// optimization.
+fn pin_cores() {
+    use affinity::*;
+    let cores: Vec<usize> = match std::env::var("SMOL_THREADS") {
+        Ok(count) => {
+            let count: usize = count.parse().expect("Failed to parse the SMOL_THREADS");
+            debug!("Requested {count} threads for smol");
+            let core_count = get_core_num();
+            debug!("Counting {core_count} cores");
+            // If we've been asked to use a _lot_ of threads, forget core affinity
+            if count > core_count {
+                return;
+            }
+            // If threads are equal to cores, pin each one by one
+            if core_count == count {
+                (0..get_core_num()).step_by(1).collect()
+            }
+            // Otherwise step by two to avoid pinning to hyperthreaded "cores" and get physical
+            // CPUs if possible
+            else {
+                (0..get_core_num()).step_by(2).collect()
+            }
+        }
+        Err(_) => (0..get_core_num()).step_by(2).collect(),
+    };
+    info!("Binding thread to cores : {:?}", &cores);
+
+    set_thread_affinity(&cores).unwrap();
+    info!(
+        "Current thread affinity : {:?}",
+        get_thread_affinity().unwrap()
+    );
+}
+
+/// Main asynchronous runloop
 async fn run() -> Result<(), errors::HotdogError> {
-    pretty_env_logger::init();
-
-    info!("Starting hotdog version {}", env!["CARGO_PKG_VERSION"]);
-
+    pin_cores();
     let matches = App::new("Hotdog")
         .version(env!("CARGO_PKG_VERSION"))
         .author("R Tyler Croy <rtyler@buoyantdata.com>")

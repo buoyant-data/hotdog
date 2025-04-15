@@ -3,6 +3,8 @@
 # This script is useful for generating some load to send to hotdog, best way to
 # run it is with:
 #   ruby generate-stdout.rb | openssl s_client -connect localhost:6514
+#   or
+#   ./scripts/generate-stdout.rb | parallel -j4 --pipe --  openssl s_client -connect localhost:6514
 #
 
 require 'json'

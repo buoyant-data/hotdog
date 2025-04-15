@@ -8,7 +8,7 @@ use smol::stream::StreamExt;
 use tracing::log::*;
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::errors;
 use crate::merge;
@@ -17,6 +17,20 @@ use crate::rules;
 use crate::settings::*;
 use crate::sink::Message;
 use crate::status::{Statistic, Stats};
+
+static HB: OnceLock<Handlebars> = OnceLock::new();
+
+/// Retrieve the static Handlebars renderer
+fn hb<'a>(settings: Arc<Settings>) -> &'a Handlebars<'a> {
+    let renderer = HB.get_or_init(|| {
+        let mut hb = Handlebars::new();
+        if !precompile_templates(&mut hb, settings.clone()) {
+            panic!("Failed to precompile the handlebars templates, check the config please!");
+        }
+        hb
+    });
+    renderer
+}
 
 /// RuleState exists to help carry state into merge/replacement functions and exists only during the
 /// processing of rules
@@ -54,16 +68,10 @@ impl Connection {
     ) -> Result<(), errors::HotdogError> {
         let mut lines = reader.lines();
 
-        let mut hb = Handlebars::new();
+        // TODO: this needs to move up into the construction of the Connection rather than on the
+        // read loop to reduce CPU utilization
+        let hb = hb(self.settings.clone());
         let mut jmespaths = JmesPathExpressions::new();
-
-        if !precompile_templates(&mut hb, self.settings.clone()) {
-            error!(
-                "Failing to precompile templates is a fatal error, not going to parse logs since the configuration is broken"
-            );
-            // TODO fix the Err types
-            return Ok(());
-        }
 
         if !precompile_jmespath(&mut jmespaths, self.settings.clone()) {
             error!(
@@ -103,6 +111,10 @@ impl Connection {
                 if !continue_rules {
                     break;
                 }
+
+
+                // TODO: These default hashs  should probably move out of the rules loop
+
 
                 // The output buffer that we will ultimately send along to the Kafka service
                 let mut output = String::new();
