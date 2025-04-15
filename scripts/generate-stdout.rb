@@ -7,7 +7,7 @@
 
 require 'json'
 
-count = ARGV.first  || 10_000
+count = ARGV.first  || 100_000
 
 count.to_i.times do |count|
   x = {

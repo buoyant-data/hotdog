@@ -15,7 +15,7 @@ global:
   parquet:
     url: 's3://hotdog/streams/'
     # Bytes to buffer
-    buffer: 128
+    buffer: 1024000
     flush_ms: 60000
   metrics:
     statsd: 'localhost:8125'
