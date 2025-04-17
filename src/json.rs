@@ -1,6 +1,7 @@
 //! This module acts as a shim between serde_json and simd-json to allow for higher performance JSON
 //! parsing on SIMD-capable architectures
 
+/// Deserialize the given buffer into a [serde_json::Value]
 pub fn from_str<'a, S: serde::Deserialize<'a>>(buffer: &'a mut str) -> Result<S, std::io::Error> {
     #[cfg(feature = "simd")]
     unsafe {
@@ -14,6 +15,7 @@ pub fn from_str<'a, S: serde::Deserialize<'a>>(buffer: &'a mut str) -> Result<S,
     }
 }
 
+/// Turn the [serde_json::Value] into an owned String
 pub fn to_string<S: serde::Serialize>(value: &S) -> Result<String, serde_json::error::Error> {
     serde_json::to_string::<S>(value)
 }

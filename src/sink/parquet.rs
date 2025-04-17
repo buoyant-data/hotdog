@@ -4,11 +4,11 @@
 //!
 
 use super::{Message, Sink};
-use crate::status::Statistic;
 
 use arrow_json::reader::ReaderBuilder;
 use async_channel::{Receiver, Sender, bounded};
 use async_compat::Compat;
+use dipstick::InputQueueScope;
 use object_store::ObjectStore;
 use parquet::arrow::async_writer::{AsyncArrowWriter, ParquetObjectWriter};
 use smol::stream::StreamExt;
@@ -26,14 +26,14 @@ type ObjectStoreRef = Arc<dyn ObjectStore>;
 
 /// Parquet sink which handles creating parquet files from buffers and writing them into the
 /// storage layer
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Parquet {
     /// Configuration from the hotdog.yml
     config: Config,
     /// Underlying object store
     store: ObjectStoreRef,
     /// Stats channel for reporting information
-    stats: Sender<Statistic>,
+    stats: InputQueueScope,
     /// Receiver side of the channel for this sink
     rx: Receiver<Message>,
     /// Producer side of the channel for this sink
@@ -44,7 +44,7 @@ pub struct Parquet {
 impl Sink for Parquet {
     type Config = Config;
 
-    fn new(config: Self::Config, stats: Sender<Statistic>) -> Self {
+    fn new(config: Self::Config, stats: InputQueueScope) -> Self {
         let (tx, rx) = bounded(1024);
         let opts: HashMap<String, String> = HashMap::from_iter(std::env::vars());
         let (store, _path) = object_store::parse_url_opts(&config.url, opts)

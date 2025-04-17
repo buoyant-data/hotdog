@@ -1,3 +1,7 @@
+//!
+//! The serve module is responsible for general syslog over TCP serving functionality
+//!
+
 use crate::connection::*;
 use crate::errors;
 use crate::settings::Settings;
@@ -5,11 +9,9 @@ use crate::sink::Sink;
 use crate::sink::kafka::Kafka;
 use crate::sink::parquet::Parquet;
 use crate::status;
-/**
- * The serve module is responsible for general syslog over TCP serving functionality
- */
-use async_channel::Sender;
 use async_trait::async_trait;
+use dipstick::InputQueueScope;
+use dipstick::InputScope;
 use smol::io::BufReader;
 use smol::net::{SocketAddr, TcpListener, TcpStream};
 use smol::stream::StreamExt;
@@ -25,7 +27,7 @@ pub struct ServerState {
     /**
      * A Sender for sending statistics to the status handler
      */
-    pub stats: Sender<status::Statistic>,
+    pub stats: InputQueueScope,
 }
 
 /**
@@ -59,7 +61,7 @@ pub trait Server {
         &self,
         stream: TcpStream,
         connection: Connection,
-        stats: Sender<status::Statistic>,
+        stats: InputQueueScope,
     ) -> Result<(), std::io::Error> {
         debug!("Accepting from: {}", stream.peer_addr()?);
         let reader = BufReader::new(stream);
@@ -68,8 +70,6 @@ pub trait Server {
             if let Err(e) = connection.read_logs(reader).await {
                 error!("Failure occurred while read_logs executed: {:?}", e);
             }
-
-            let _ = stats.send((status::Stats::ConnectionCount, -1)).await;
         })
         .detach();
 
@@ -119,19 +119,29 @@ pub trait Server {
 
         let listener = TcpListener::bind(addr).await?;
         let mut incoming = listener.incoming();
+        let mut conn_count = 0;
 
         while let Some(stream) = incoming.next().await {
             let stream = stream?;
             debug!("Accepting from: {}", stream.peer_addr()?);
 
-            let _ = state.stats.send((status::Stats::ConnectionCount, 1)).await;
-
             let connection =
                 Connection::new(state.settings.clone(), sender.clone(), state.stats.clone());
+
+            conn_count += 1;
+            state
+                .stats
+                .gauge(&status::Stats::ConnectionCount.to_string())
+                .value(conn_count);
 
             if let Err(e) = self.handle_connection(stream, connection, state.stats.clone()) {
                 error!("Failed to handle_connection properly: {:?}", e);
             }
+            conn_count -= 1;
+            state
+                .stats
+                .gauge(&status::Stats::ConnectionCount.to_string())
+                .value(conn_count);
         }
 
         self.shutdown(&state)?;

@@ -6,8 +6,8 @@ use crate::status;
 ///
 /// This module handles the necessary configuration to serve over TLS
 ///
-use async_channel::Sender;
 use async_tls::TlsAcceptor;
+use dipstick::InputQueueScope;
 use rustls::server::ServerConfig;
 use rustls::{Certificate, PrivateKey};
 use smol::io::BufReader;
@@ -43,7 +43,7 @@ impl Server for TlsServer {
         &self,
         stream: TcpStream,
         connection: Connection,
-        stats: Sender<status::Statistic>,
+        stats: InputQueueScope,
     ) -> Result<(), std::io::Error> {
         debug!("Accepting from: {}", stream.peer_addr()?);
 
@@ -66,7 +66,8 @@ impl Server for TlsServer {
                 }
             };
 
-            let _ = stats.send((status::Stats::ConnectionCount, -1)).await;
+            // TODO
+            // let _ = stats.send((status::Stats::ConnectionCount, -1)).await;
         })
         .detach();
         Ok(())

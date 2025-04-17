@@ -7,7 +7,7 @@ extern crate simd_json;
 extern crate strum_macros;
 
 use clap::{App, Arg};
-use dipstick::{Input, Prefixed, Statsd};
+use dipstick::{Input, InputQueueScope, Prefixed, Statsd};
 use tracing::log::*;
 
 use std::sync::Arc;
@@ -111,26 +111,16 @@ async fn run() -> Result<(), errors::HotdogError> {
 
     let settings_file = matches.value_of("config").unwrap_or("hotdog.yml");
     let settings = Arc::new(settings::load(settings_file));
-    let metrics = Arc::new(
-        Statsd::send_to(&settings.global.metrics.statsd)
-            .expect("Failed to create Statsd recorder")
-            .named("hotdog")
-            .metrics(),
-    );
+    let metrics = Statsd::send_to(&settings.global.metrics.statsd)
+        .expect("Failed to create Statsd recorder")
+        .named("hotdog")
+        .metrics();
 
-    let stats = Arc::new(status::StatsHandler::new(metrics.clone()));
-    let stats_sender = stats.tx.clone();
+    let input = InputQueueScope::wrap(metrics, 1_000);
 
     if let Some(st) = &settings.global.status {
-        let _task = smol::spawn(status::status_server(
-            format!("{}:{}", st.address, st.port),
-            stats.clone(),
-        ));
+        let _task = smol::spawn(status::status_server(format!("{}:{}", st.address, st.port)));
     }
-
-    let _task = smol::spawn(async move {
-        stats.runloop().await;
-    });
 
     if let Some(test_file) = matches.value_of("test") {
         return rules::test_rules(test_file, settings).await;
@@ -144,7 +134,7 @@ async fn run() -> Result<(), errors::HotdogError> {
 
     let state = ServerState {
         settings: settings.clone(),
-        stats: stats_sender,
+        stats: input,
     };
 
     match &settings.global.listen.tls {

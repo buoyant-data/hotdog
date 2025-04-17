@@ -4,6 +4,7 @@
 //!
 
 use async_channel::{Receiver, Sender, bounded};
+use dipstick::{InputQueueScope, InputScope};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer};
@@ -14,11 +15,10 @@ use serde::Deserialize;
 use tracing::log::*;
 
 use std::collections::HashMap;
-use std::convert::TryInto;
 use std::time::{Duration, Instant};
 
 use super::{Message, Sink};
-use crate::status::{Statistic, Stats};
+use crate::status::Stats;
 
 /// The Kafka [Sink] acts as the primary interface between hotdog and Kafka
 ///
@@ -32,7 +32,7 @@ pub struct Kafka {
      * ::new() and the .connect() function
      */
     producer: Option<FutureProducer<DefaultClientContext>>,
-    stats: Sender<Statistic>,
+    stats: InputQueueScope,
     rx: Receiver<Message>,
     tx: Sender<Message>,
 }
@@ -41,7 +41,7 @@ pub struct Kafka {
 impl Sink for Kafka {
     type Config = Config;
 
-    fn new(config: Config, stats: Sender<Statistic>) -> Self {
+    fn new(config: Config, stats: InputQueueScope) -> Self {
         let (tx, rx) = bounded(config.buffer);
         Kafka {
             producer: None,
@@ -120,6 +120,8 @@ impl Sink for Kafka {
                  */
                 let stats = self.stats.clone();
 
+                let timer = self.stats.timer(&Stats::KafkaMsgSent.to_string());
+                let start_handle = timer.start();
                 let start_time = Instant::now();
                 let producer = producer.clone();
 
@@ -130,7 +132,8 @@ impl Sink for Kafka {
                 smol::future::yield_now().await;
 
                 smol::spawn(async move {
-                    let record = FutureRecord::<String, String>::to(&kmsg.destination).payload(&kmsg.payload);
+                    let record = FutureRecord::<String, String>::to(&kmsg.destination)
+                        .payload(&kmsg.payload);
                     let timeout = Timeout::After(Duration::from_secs(60));
                     /*
                      * Intentionally setting the timeout_ms to -1 here so this blocks forever if the
@@ -140,20 +143,15 @@ impl Sink for Kafka {
                      */
                     match producer.send(record, timeout).await {
                         Ok(_) => {
-                            let _ = stats
-                                .send((Stats::KafkaMsgSubmitted { topic: kmsg.destination }, 1))
-                                .await;
-                            /*
-                             * dipstick only supports u64 timers anyways, but as_micros() can
-                             * give a u128 (!).
-                             */
-                            if let Ok(elapsed) = start_time.elapsed().as_micros().try_into() {
-                                let _ = stats.send((Stats::KafkaMsgSent, elapsed)).await;
-                            } else {
-                                error!(
-                                    "Could not collect message time because the duration couldn't fit in an i64, yikes"
-                                );
-                            }
+                            stats
+                                .counter(
+                                    &Stats::KafkaMsgSubmitted {
+                                        topic: kmsg.destination,
+                                    }
+                                    .to_string(),
+                                )
+                                .count(1);
+                            timer.stop(start_handle);
                         }
                         Err((err, _)) => {
                             match err {
@@ -163,30 +161,31 @@ impl Sink for Kafka {
                                  */
                                 KafkaError::MessageProduction(err_type) => {
                                     error!("Failed to send message to Kafka due to: {}", err_type);
-                                    let _ = stats
-                                        .send((
-                                            Stats::KafkaMsgErrored {
+                                    stats
+                                        .counter(
+                                            &Stats::KafkaMsgErrored {
                                                 errcode: metric_name_for(err_type),
-                                            },
-                                            1,
-                                        ))
-                                        .await;
+                                            }
+                                            .to_string(),
+                                        )
+                                        .count(1);
                                 }
-                                _ => {
-                                    error!("Failed to send message to Kafka!");
-                                    let _ = stats
-                                        .send((
-                                            Stats::KafkaMsgErrored {
-                                                errcode: String::from("generic"),
-                                            },
-                                            1,
-                                        ))
-                                        .await;
+                                other => {
+                                    error!("Failed to send message to Kafka! {other:?}");
+                                    stats
+                                        .counter(
+                                            &Stats::KafkaMsgErrored {
+                                                errcode: format!("{other:?}"),
+                                            }
+                                            .to_string(),
+                                        )
+                                        .count(1);
                                 }
                             }
                         }
                     }
-                }).detach();
+                })
+                .detach();
             }
         }
     }
@@ -239,11 +238,12 @@ mod tests {
             String::from("bootstrap.servers"),
             String::from("example.com:9092"),
         );
-        let (unused_sender, _) = bounded(1);
         let mut config = Config::default();
         config.buffer = 1;
 
-        let mut k = Kafka::new(config, unused_sender);
+        let bucket = dipstick::AtomicBucket::new();
+        let stats = InputQueueScope::wrap(bucket.clone(), 100);
+        let mut k = Kafka::new(config, stats);
         smol::block_on(k.bootstrap());
     }
 

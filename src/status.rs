@@ -6,7 +6,7 @@
  */
 use async_channel::{Receiver, Sender, bounded};
 use dashmap::DashMap;
-use dipstick::{InputScope, StatsdScope};
+use dipstick::{InputQueueScope, InputScope, StatsdScope};
 use serde::{Deserialize, Serialize};
 use tide::{Body, Request, Response, StatusCode};
 use tracing::log::*;
@@ -28,24 +28,20 @@ struct HealthResponse {
 /**
  * Launch the status server
  */
-pub async fn status_server(
-    listen_to: String,
-    stats: Arc<StatsHandler>,
-) -> Result<(), std::io::Error> {
-    let mut app = tide::with_state(stats);
+pub async fn status_server(listen_to: String) -> Result<(), std::io::Error> {
+    let mut app = tide::new();
     debug!("Starting the status server on: {}", listen_to);
 
     app.at("/")
         .get(|_| async move { Ok("hotdog status server") });
 
-    app.at("/stats")
-        .get(|req: Request<Arc<StatsHandler>>| async move {
-            let health = req.state().healthcheck().await;
+    app.at("/stats").get(|req: Request<()>| async move {
+        let health: HashMap<String, String> = HashMap::default();
 
-            let mut res = Response::new(StatusCode::Ok);
-            res.set_body(Body::from_json(&health)?);
-            Ok(res)
-        });
+        let mut res = Response::new(StatusCode::Ok);
+        res.set_body(Body::from_json(&health)?);
+        Ok(res)
+    });
 
     app.listen(listen_to).await?;
     Ok(())
@@ -59,28 +55,22 @@ pub type Statistic = (Stats, i64);
 
 pub struct StatsHandler {
     values: ThreadsafeStats,
-    metrics: Arc<StatsdScope>,
+    mx: InputQueueScope,
     rx: Receiver<Statistic>,
     pub tx: Sender<Statistic>,
 }
 
 impl StatsHandler {
-    pub fn new(metrics: Arc<StatsdScope>) -> Self {
+    pub fn new(metrics: StatsdScope) -> Self {
         let (tx, rx) = bounded(1_000_000);
         let values = Arc::new(DashMap::default());
+        let mx = InputQueueScope::wrap(metrics, 1_000);
 
-        StatsHandler {
-            values,
-            metrics,
-            rx,
-            tx,
-        }
+        StatsHandler { values, mx, rx, tx }
     }
 
-    /**
-     * The runloop will simply read from the channel and record statistics as
-     * they come in
-     */
+    /// The runloop will simply read from the channel and record statistics as
+    /// they come in
     pub async fn runloop(&self) {
         loop {
             if let Ok((stat, count)) = self.rx.recv().await {
@@ -101,67 +91,67 @@ impl StatsHandler {
         }
     }
 
-    /**
-     * Update the internal map with a new count like it is a gauge
-     */
+    /// Update the internal map with a new count like it is a gauge
     async fn handle_gauge(&self, stat: Stats, count: i64) {
         let key = &stat.to_string();
         let mut new_count = 0;
 
-        if let Some(gauge) = self.values.get(key) {
-            new_count = *gauge.value();
+        if let Some(mut gauge) = self.values.get_mut(key) {
+            (*gauge) += count;
+            new_count = *gauge;
+        } else {
+            self.values.insert(key.to_string(), count);
+            new_count = count;
         }
-        new_count += count;
-        self.metrics.gauge(key).value(new_count);
-        self.values.insert(key.to_string(), new_count);
+        //self.metrics.gauge(key).value(new_count);
     }
 
-    /**
-     * Update the internal map with a new count like it is a counter
-     */
+    /// Update the internal map with a new count like it is a counter
     async fn handle_counter(&self, stat: Stats, count: i64) {
+        /*
         let key = &stat.to_string();
         let mut new_count = 0;
 
-        if let Some(counter) = self.values.get(key) {
-            new_count = *counter.value();
+        if let Some(mut counter) = self.values.get_mut(key) {
+            (*counter) += count;
+            new_count = *counter;
         }
-        new_count += count;
+        else {
+            self.values.insert(key.to_string(), count);
+        }
 
-        let sized_count: usize = count.try_into().expect("Could not convert to usize!");
-
-        self.metrics.counter(key).count(sized_count);
+        let sized_count: usize = new_count.try_into().expect("Could not convert to usize!");
+        //self.metrics.counter(key).count(sized_count);
 
         /* Handle special case enums which have more data associated */
         match &stat {
             Stats::KafkaMsgSubmitted { topic } => {
                 let subkey = &*format!("{}.{}", key, topic);
-                self.metrics.counter(subkey).count(sized_count);
+                //self.metrics.counter(subkey).count(sized_count);
                 self.values.insert(subkey.to_string(), new_count);
             }
             Stats::KafkaMsgErrored { errcode } => {
                 let subkey = &*format!("{}.{}", key, errcode);
-                self.metrics.counter(subkey).count(sized_count);
+                //self.metrics.counter(subkey).count(sized_count);
                 self.values.insert(subkey.to_string(), new_count);
             }
             _ => {}
         };
-
-        self.values.insert(key.to_string(), new_count);
+        */
     }
 
-    /**
-     * Update the internal map with the latest timero
-     */
+    /// Update the internal map with the latest timero
     async fn handle_timer(&self, stat: Stats, duration_us: i64) {
+        /*
         let key = &stat.to_string();
 
         if let Ok(duration) = duration_us.try_into() {
-            self.metrics.timer(key).interval_us(duration);
+            //self.metrics.timer(key).interval_us(duration);
         } else {
             error!("Failed to report timer to statsd with an i64 that couldn't fit into u64");
         }
         self.values.insert(key.to_string(), duration_us);
+        */
     }
 
     /**

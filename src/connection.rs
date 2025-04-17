@@ -2,6 +2,7 @@
 //! connection.
 use async_channel::Sender;
 use chrono::prelude::*;
+use dipstick::{InputQueueScope, InputScope};
 use handlebars::Handlebars;
 use smol::io::{AsyncBufReadExt, BufReader};
 use smol::stream::StreamExt;
@@ -16,7 +17,7 @@ use crate::parse;
 use crate::rules;
 use crate::settings::*;
 use crate::sink::Message;
-use crate::status::{Statistic, Stats};
+use crate::status::Stats;
 
 static HB: OnceLock<Handlebars> = OnceLock::new();
 
@@ -37,7 +38,6 @@ fn hb<'a>(settings: Arc<Settings>) -> &'a Handlebars<'a> {
 struct RuleState<'a> {
     variables: &'a HashMap<String, String>,
     hb: &'a handlebars::Handlebars<'a>,
-    stats: Sender<Statistic>,
 }
 
 /// Simple type to capture a map of precompiled jmespath expressions
@@ -49,11 +49,11 @@ pub struct Connection {
     /// The sender-side of the channel to our Kafka connection, allowing the logs read in to be
     /// sent over to the Kafka handler
     sender: Sender<Message>,
-    stats: Sender<Statistic>,
+    stats: InputQueueScope,
 }
 
 impl Connection {
-    pub fn new(settings: Arc<Settings>, sender: Sender<Message>, stats: Sender<Statistic>) -> Self {
+    pub fn new(settings: Arc<Settings>, sender: Sender<Message>, stats: InputQueueScope) -> Self {
         Connection {
             settings,
             sender,
@@ -80,6 +80,7 @@ impl Connection {
             // TODO fix the Err types
             return Ok(());
         }
+        let timestamp = Utc::now().to_rfc3339();
 
         while let Some(line) = lines.next().await {
             let line = line?;
@@ -88,7 +89,9 @@ impl Connection {
             let parsed = parse::parse_line(line);
 
             if let Err(e) = &parsed {
-                let _ = self.stats.send((Stats::LogParseError, 1)).await;
+                self.stats
+                    .counter(&Stats::LogParseError.to_string())
+                    .count(1);
                 error!("failed to parse message: {:?}", e);
                 continue;
             }
@@ -99,7 +102,9 @@ impl Connection {
              * simd_json parse
              */
             let mut msg = parsed.unwrap();
-            let _ = self.stats.send((Stats::LineReceived, 1)).await;
+            self.stats
+                .counter(&Stats::LineReceived.to_string())
+                .count(1);
             let mut continue_rules = true;
             debug!("parsed as: {}", msg.msg);
 
@@ -112,17 +117,10 @@ impl Connection {
                     break;
                 }
 
-
-                // TODO: These default hashs  should probably move out of the rules loop
-
-
-                // The output buffer that we will ultimately send along to the Kafka service
+                // The output buffer that we will ultimately send along to the sink
                 let mut output = String::new();
                 let mut rule_matches = false;
                 let mut hash = HashMap::new();
-                hash.insert("msg".to_string(), String::from(&msg.msg));
-                hash.insert("version".to_string(), env!["CARGO_PKG_VERSION"].to_string());
-                hash.insert("iso8601".to_string(), Utc::now().to_rfc3339());
 
                 match rule.field {
                     Field::Msg => {
@@ -157,10 +155,14 @@ impl Connection {
                     continue;
                 }
 
+                // At this point we need these variables in case of rendering templates
+                hash.insert("msg".to_string(), String::from(&msg.msg));
+                hash.insert("version".to_string(), env!["CARGO_PKG_VERSION"].to_string());
+                hash.insert("iso8601".to_string(), timestamp.clone());
+
                 let rule_state = RuleState {
                     hb: &hb,
                     variables: &hash,
-                    stats: self.stats.clone(),
                 };
 
                 /*
@@ -207,7 +209,9 @@ impl Connection {
                                 continue_rules = false;
                             } else {
                                 error!("Failed to process the configured topic: `{}`", topic);
-                                let _ = self.stats.send((Stats::TopicParseFailed, 1)).await;
+                                self.stats
+                                    .counter(&Stats::TopicParseFailed.to_string())
+                                    .count(1);
                             }
                             break;
                         }
@@ -320,7 +324,6 @@ fn perform_merge(buffer: &mut str, template_id: &str, state: &RuleState) -> Resu
              */
             if !to_merge.is_object() {
                 error!("Merge requested was not a JSON object: {}", to_merge);
-                let _ = state.stats.send((Stats::MergeTargetNotJsonError, 1));
                 return Ok(buffer.to_string());
             }
 
@@ -333,7 +336,6 @@ fn perform_merge(buffer: &mut str, template_id: &str, state: &RuleState) -> Resu
         Err("Failed to merge and serialize".to_string())
     } else {
         error!("Failed to parse as JSON, stopping actions: {}", buffer);
-        let _ = state.stats.send((Stats::MergeInvalidJsonError, 1));
         Err("Not JSON".to_string())
     }
 }
@@ -341,18 +343,18 @@ fn perform_merge(buffer: &mut str, template_id: &str, state: &RuleState) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_channel::bounded;
 
     /// Generating a test RuleState for consistent states in test
     fn rule_state<'a>(
         hb: &'a handlebars::Handlebars<'a>,
         hash: &'a HashMap<String, String>,
     ) -> RuleState<'a> {
-        let (unused_sender, _) = bounded(1);
+        let bucket = dipstick::AtomicBucket::new();
+        let stats = InputQueueScope::wrap(bucket.clone(), 100);
         RuleState {
             hb: &hb,
             variables: &hash,
-            stats: unused_sender,
+            stats,
         }
     }
 

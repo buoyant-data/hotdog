@@ -1,5 +1,5 @@
 // Disabling this lint because I don't want to fix it in this imported code
-#![allow(suspicious_double_ref_op)]
+#![allow(dead_code, suspicious_double_ref_op)]
 /**
  * This module is from the crate json_value_merge
  *  <https://github.com/jmfiaschi/json_value_merge/>

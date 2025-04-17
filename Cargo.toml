@@ -26,9 +26,8 @@ clap = { version = "2", features = ["yaml"] }
 chrono = "0"
 # Handling configuration overlays
 config = { version = "=0.11.0", features = ["yaml"] }
-dashmap = "6"
 # Needed to report metrics of hotdog's performance
-dipstick = "0"
+dipstick = "0.9"
 # Used for string replacements and other template based transformations
 handlebars = "6"
 # used for rule matching on JSON

@@ -4,8 +4,7 @@
 //! serve syslog only
 
 use async_channel::Sender;
-
-use crate::status::Statistic;
+use dipstick::InputQueueScope;
 
 pub mod kafka;
 pub mod parquet;
@@ -25,7 +24,7 @@ pub trait Sink: Send + Sync {
     /// Construct the Sink.
     ///
     /// This function should not do anything but initialize settings and variables
-    fn new(config: Self::Config, stats: Sender<Statistic>) -> Self;
+    fn new(config: Self::Config, stats: InputQueueScope) -> Self;
 
     /// Bootstrap the sink
     ///
@@ -78,7 +77,7 @@ mod tests {
     impl Sink for TestSink {
         type Config = Option<()>;
 
-        fn new(config: Option<()>, _stats: Sender<Statistic>) -> Self {
+        fn new(config: Option<()>, _stats: InputQueueScope) -> Self {
             Self { config }
         }
 
