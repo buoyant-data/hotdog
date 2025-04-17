@@ -26,7 +26,7 @@ clap = { version = "2", features = ["yaml"] }
 chrono = "0"
 # Handling configuration overlays
 config = { version = "=0.11.0", features = ["yaml"] }
-dashmap = "3"
+dashmap = "6"
 # Needed to report metrics of hotdog's performance
 dipstick = "0"
 # Used for string replacements and other template based transformations
@@ -83,6 +83,7 @@ tracing-subscriber = "0.3.19"
 url = { version = "2.5.4", features = ["serde"] }
 ctrlc = "3.4.6"
 affinity = "0.1.2"
+jemallocator = "0.5.4"
 
 # Optimize the heck out of the release build, I have no idea what these flags
 # do

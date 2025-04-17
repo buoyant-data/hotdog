@@ -28,6 +28,9 @@ mod status;
 use serve::*;
 use settings::*;
 
+#[global_allocator]
+static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
 /// Non-async entrypoint which will set up the logger and launch the main smol task
 fn main() -> Result<(), errors::HotdogError> {
     pretty_env_logger::init();
