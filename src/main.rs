@@ -19,8 +19,6 @@ mod merge;
 mod parse;
 mod rules;
 mod serve;
-mod serve_plain;
-mod serve_tls;
 mod settings;
 mod sink;
 mod status;
@@ -144,12 +142,12 @@ async fn run() -> Result<(), errors::HotdogError> {
             ca: _,
         } => {
             info!("Serving in TLS mode");
-            let mut server = crate::serve_tls::TlsServer::new(&state);
+            let mut server = serve::tls::TlsServer::new(&state);
             server.accept_loop(&addr, state).await
         }
         _ => {
             info!("Serving in plaintext mode");
-            let mut server = crate::serve_plain::PlaintextServer {};
+            let mut server = serve::plain::PlaintextServer {};
             server.accept_loop(&addr, state).await
         }
     }

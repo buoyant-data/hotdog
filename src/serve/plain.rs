@@ -1,5 +1,5 @@
 //! This module is responsible for receiving connections over plaintext TCP
-use crate::serve::*;
+use crate::serve::Server;
 
 pub struct PlaintextServer {}
 

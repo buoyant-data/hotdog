@@ -122,7 +122,6 @@ impl Sink for Kafka {
 
                 let timer = self.stats.timer(&Stats::KafkaMsgSent.to_string());
                 let start_handle = timer.start();
-                let start_time = Instant::now();
                 let producer = producer.clone();
 
                 /*
@@ -145,10 +144,10 @@ impl Sink for Kafka {
                         Ok(_) => {
                             stats
                                 .counter(
-                                    &Stats::KafkaMsgSubmitted {
+                                    Stats::KafkaMsgSubmitted {
                                         topic: kmsg.destination,
                                     }
-                                    .to_string(),
+                                    .into(),
                                 )
                                 .count(1);
                             timer.stop(start_handle);
@@ -163,10 +162,10 @@ impl Sink for Kafka {
                                     error!("Failed to send message to Kafka due to: {}", err_type);
                                     stats
                                         .counter(
-                                            &Stats::KafkaMsgErrored {
+                                            Stats::KafkaMsgErrored {
                                                 errcode: metric_name_for(err_type),
                                             }
-                                            .to_string(),
+                                            .into(),
                                         )
                                         .count(1);
                                 }
@@ -174,10 +173,10 @@ impl Sink for Kafka {
                                     error!("Failed to send message to Kafka! {other:?}");
                                     stats
                                         .counter(
-                                            &Stats::KafkaMsgErrored {
+                                            Stats::KafkaMsgErrored {
                                                 errcode: format!("{other:?}"),
                                             }
-                                            .to_string(),
+                                            .into(),
                                         )
                                         .count(1);
                                 }

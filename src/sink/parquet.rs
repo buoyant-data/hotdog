@@ -32,8 +32,6 @@ pub struct Parquet {
     config: Config,
     /// Underlying object store
     store: ObjectStoreRef,
-    /// Stats channel for reporting information
-    stats: InputQueueScope,
     /// Receiver side of the channel for this sink
     rx: Receiver<Message>,
     /// Producer side of the channel for this sink
@@ -44,7 +42,7 @@ pub struct Parquet {
 impl Sink for Parquet {
     type Config = Config;
 
-    fn new(config: Self::Config, stats: InputQueueScope) -> Self {
+    fn new(config: Self::Config, _stats: InputQueueScope) -> Self {
         let (tx, rx) = bounded(1024);
         let opts: HashMap<String, String> = HashMap::from_iter(std::env::vars());
         let (store, _path) = object_store::parse_url_opts(&config.url, opts)
@@ -54,7 +52,6 @@ impl Sink for Parquet {
             config,
             tx,
             rx,
-            stats,
             store,
         }
     }

@@ -19,6 +19,9 @@ use tracing::log::*;
 
 use std::sync::Arc;
 
+pub mod plain;
+pub mod tls;
+
 pub struct ServerState {
     /**
      * A reference to the global Settings object for all configuration information
@@ -61,7 +64,6 @@ pub trait Server {
         &self,
         stream: TcpStream,
         connection: Connection,
-        stats: InputQueueScope,
     ) -> Result<(), std::io::Error> {
         debug!("Accepting from: {}", stream.peer_addr()?);
         let reader = BufReader::new(stream);
@@ -131,16 +133,16 @@ pub trait Server {
             conn_count += 1;
             state
                 .stats
-                .gauge(&status::Stats::ConnectionCount.to_string())
+                .gauge(status::Stats::ConnectionCount.into())
                 .value(conn_count);
 
-            if let Err(e) = self.handle_connection(stream, connection, state.stats.clone()) {
+            if let Err(e) = self.handle_connection(stream, connection) {
                 error!("Failed to handle_connection properly: {:?}", e);
             }
             conn_count -= 1;
             state
                 .stats
-                .gauge(&status::Stats::ConnectionCount.to_string())
+                .gauge(status::Stats::ConnectionCount.into())
                 .value(conn_count);
         }
 

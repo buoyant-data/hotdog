@@ -89,9 +89,7 @@ impl Connection {
             let parsed = parse::parse_line(line);
 
             if let Err(e) = &parsed {
-                self.stats
-                    .counter(&Stats::LogParseError.to_string())
-                    .count(1);
+                self.stats.counter(Stats::LogParseError.into()).count(1);
                 error!("failed to parse message: {:?}", e);
                 continue;
             }
@@ -102,9 +100,7 @@ impl Connection {
              * simd_json parse
              */
             let mut msg = parsed.unwrap();
-            self.stats
-                .counter(&Stats::LineReceived.to_string())
-                .count(1);
+            self.stats.counter(Stats::LineReceived.into()).count(1);
             let mut continue_rules = true;
             debug!("parsed as: {}", msg.msg);
 
@@ -209,9 +205,7 @@ impl Connection {
                                 continue_rules = false;
                             } else {
                                 error!("Failed to process the configured topic: `{}`", topic);
-                                self.stats
-                                    .counter(&Stats::TopicParseFailed.to_string())
-                                    .count(1);
+                                self.stats.counter(Stats::TopicParseFailed.into()).count(1);
                             }
                             break;
                         }
@@ -349,12 +343,9 @@ mod tests {
         hb: &'a handlebars::Handlebars<'a>,
         hash: &'a HashMap<String, String>,
     ) -> RuleState<'a> {
-        let bucket = dipstick::AtomicBucket::new();
-        let stats = InputQueueScope::wrap(bucket.clone(), 100);
         RuleState {
             hb: &hb,
             variables: &hash,
-            stats,
         }
     }
 

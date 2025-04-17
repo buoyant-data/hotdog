@@ -1,13 +1,12 @@
-use crate::connection::*;
+//!
+//! This module handles the necessary configuration to serve over TLS
+//!
+use crate::connection::Connection;
 use crate::errors;
-use crate::serve::*;
+use crate::serve::{Server, ServerState};
 use crate::settings::*;
-use crate::status;
-///
-/// This module handles the necessary configuration to serve over TLS
-///
+
 use async_tls::TlsAcceptor;
-use dipstick::InputQueueScope;
 use rustls::server::ServerConfig;
 use rustls::{Certificate, PrivateKey};
 use smol::io::BufReader;
@@ -43,7 +42,6 @@ impl Server for TlsServer {
         &self,
         stream: TcpStream,
         connection: Connection,
-        stats: InputQueueScope,
     ) -> Result<(), std::io::Error> {
         debug!("Accepting from: {}", stream.peer_addr()?);
 
@@ -65,9 +63,6 @@ impl Server for TlsServer {
                     error!("Unable to establish a TLS Stream for client! {:?}", err);
                 }
             };
-
-            // TODO
-            // let _ = stats.send((status::Stats::ConnectionCount, -1)).await;
         })
         .detach();
         Ok(())
