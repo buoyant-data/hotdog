@@ -14,6 +14,7 @@ use parquet::arrow::async_writer::{AsyncArrowWriter, ParquetObjectWriter};
 use smol::stream::StreamExt;
 use tracing::log::*;
 use tracing::{Level, span};
+use url::Url;
 use uuid::Uuid;
 
 use std::collections::HashMap;
@@ -44,7 +45,11 @@ impl Sink for Parquet {
 
     fn new(config: Self::Config, _stats: InputQueueScope) -> Self {
         let (tx, rx) = bounded(1024);
-        let opts: HashMap<String, String> = HashMap::from_iter(std::env::vars());
+        // [object_store] largely expects environment variables to be all lowercased for
+        // consideration as options
+        let opts: HashMap<String, String> = HashMap::from_iter(
+            std::env::vars().map(|(k, v)| (k.to_ascii_lowercase(), v))
+        );
         let (store, _path) = object_store::parse_url_opts(&config.url, opts)
             .expect("Failed to parse the Parquet sink URL");
         let store = Arc::new(store);
@@ -181,14 +186,23 @@ fn flush_to_parquet(store: ObjectStoreRef, destination: &str, buffer: Vec<String
 /// Configuration for [Parquet] sink
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Config {
+    #[serde(default = "parquet_url_default")]
     /// Expected to be an S3 compatible URL
-    pub url: url::Url,
+    pub url: Url,
     /// Minimum number of bytes to buffer into each parquet file
     #[serde(default = "parquet_buffer_default")]
     pub buffer: usize,
     /// Duration in milliseconds before a flush to storage should happen
     #[serde(default = "parquet_flush_default")]
     pub flush_ms: usize,
+}
+
+/// Retrieves a URL from the environment for parquet if no [Url] has been specified
+fn parquet_url_default() -> Url {
+    Url::parse(&std::env::var("S3_OUTPUT_URL").expect(
+        "There is no url: defined for the parquet sink and no S3_OUTPUT_URL in the environment!",
+    ))
+    .expect("The S3_OUTPUT_URL could not be parsed as a valid URL")
 }
 
 /// Default number of log lines per parquet file

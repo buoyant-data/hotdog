@@ -226,6 +226,29 @@ configured Kafka brokers.
 "default topic" for the <<action-forward, Forward action>>.
 
 
+[[yml-parquet]]
+==== Parquet
+
+The link:https://parquet.apache.org[Apache Parquet] sink allows for directly
+writing to an
+link:https://docs.rs/object_store/latest/object_store/index.html[object_store]
+supported `url`
+
+[source,yaml]
+----
+global:
+  parquet:
+    url: 's3://hotdog/streams/'
+    # Bytes to buffer
+    buffer: 1024000
+    flush_ms: 60000
+----
+
+[TIP]
+====
+The `url` can be omitted from the configuration and specified in the environment via `S3_OUTPUT_URL`
+====
+
 [[yml-metrics]]
 ==== Metrics
 
