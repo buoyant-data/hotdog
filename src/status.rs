@@ -27,7 +27,7 @@ pub async fn status_server(listen_to: String) -> Result<(), std::io::Error> {
     app.at("/")
         .get(|_| async move { Ok("hotdog status server") });
 
-    app.at("/stats").get(|req: Request<()>| async move {
+    app.at("/stats").get(|_req: Request<()>| async move {
         let health: HashMap<String, String> = HashMap::default();
 
         let mut res = Response::new(StatusCode::Ok);

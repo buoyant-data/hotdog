@@ -79,7 +79,7 @@ fn load_tls_config(state: &ServerState) -> std::io::Result<ServerConfig> {
                 panic!("TLS key could not be properly loaded! This is fatal!");
             }
 
-            if let Some(ca_path) = ca.as_ref() {
+            if let Some(_ca_path) = ca.as_ref() {
                 panic!("Using a custom Certificate Authority is not currently supported!");
             } else {
                 debug!("Loading the certificate and key into the ServerConfig: {cert:?}");

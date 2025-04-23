@@ -15,7 +15,7 @@ use serde::Deserialize;
 use tracing::log::*;
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::{Message, Sink};
 use crate::status::Stats;

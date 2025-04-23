@@ -47,9 +47,8 @@ impl Sink for Parquet {
         let (tx, rx) = bounded(1024);
         // [object_store] largely expects environment variables to be all lowercased for
         // consideration as options
-        let opts: HashMap<String, String> = HashMap::from_iter(
-            std::env::vars().map(|(k, v)| (k.to_ascii_lowercase(), v))
-        );
+        let opts: HashMap<String, String> =
+            HashMap::from_iter(std::env::vars().map(|(k, v)| (k.to_ascii_lowercase(), v)));
         let (store, _path) = object_store::parse_url_opts(&config.url, opts)
             .expect("Failed to parse the Parquet sink URL");
         let store = Arc::new(store);
@@ -218,6 +217,21 @@ fn parquet_flush_default() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_deser_config() {
+        let conf = r#"
+---
+url: 's3://bucket'
+        "#;
+        let parquet: Config = serde_yaml::from_str(conf).expect("Failed to deserialize");
+        assert_eq!(parquet.buffer, parquet_buffer_default());
+        assert_eq!(parquet.flush_ms, parquet_flush_default());
+        assert_eq!(
+            parquet.url,
+            Url::parse("s3://bucket").expect("Failed to parse a basic URL")
+        );
+    }
 
     #[test]
     fn test_defaults() {
