@@ -84,7 +84,7 @@ impl Connection {
 
         while let Some(line) = lines.next().await {
             let line = line?;
-            debug!("log: {}", line);
+            trace!("log: {}", line);
 
             let parsed = parse::parse_line(line);
 
@@ -102,7 +102,7 @@ impl Connection {
             let mut msg = parsed.unwrap();
             self.stats.counter(Stats::LineReceived.into()).count(1);
             let mut continue_rules = true;
-            debug!("parsed as: {}", msg.msg);
+            trace!("parsed as: {}", msg.msg);
 
             for rule in self.settings.rules.iter() {
                 /*

@@ -41,7 +41,7 @@ pub struct Kafka {
 impl Sink for Kafka {
     type Config = Config;
 
-    fn new(config: Config, stats: InputQueueScope) -> Self {
+    fn new(config: Config, _schemas: &[crate::settings::Schema], stats: InputQueueScope) -> Self {
         let (tx, rx) = bounded(config.buffer);
         Kafka {
             producer: None,
@@ -242,7 +242,7 @@ mod tests {
 
         let bucket = dipstick::AtomicBucket::new();
         let stats = InputQueueScope::wrap(bucket.clone(), 100);
-        let mut k = Kafka::new(config, stats);
+        let mut k = Kafka::new(config, &[], stats);
         smol::block_on(k.bootstrap());
     }
 

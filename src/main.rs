@@ -18,6 +18,7 @@ mod json;
 mod merge;
 mod parse;
 mod rules;
+mod schema;
 mod serve;
 mod settings;
 mod sink;

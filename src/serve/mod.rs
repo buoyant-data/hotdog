@@ -92,7 +92,11 @@ pub trait Server {
         // If the Kafka sink is defined in the configuration, then spin up the configuration
         if let Some(kafka_conf) = &state.settings.global.kafka {
             info!("Configuring a Kafka sink with: {kafka_conf:?}");
-            let mut kafka = Kafka::new(kafka_conf.clone(), state.stats.clone());
+            let mut kafka = Kafka::new(
+                kafka_conf.clone(),
+                &state.settings.schemas,
+                state.stats.clone(),
+            );
 
             kafka.bootstrap().await;
             sender = Some(kafka.get_sender());
@@ -106,7 +110,11 @@ pub trait Server {
 
         if let Some(parquet_conf) = &state.settings.global.parquet {
             info!("Configuring a Parquet sink with: {parquet_conf:?}");
-            let pq = Parquet::new(parquet_conf.clone(), state.stats.clone());
+            let pq = Parquet::new(
+                parquet_conf.clone(),
+                &state.settings.schemas,
+                state.stats.clone(),
+            );
             sender = Some(pq.get_sender());
             smol::spawn(async move {
                 debug!("Starting Parquet loop");

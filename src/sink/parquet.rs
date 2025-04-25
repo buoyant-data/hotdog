@@ -18,9 +18,11 @@ use url::Url;
 use uuid::Uuid;
 
 use std::collections::HashMap;
-use std::io::{Cursor, Seek, Write};
+use std::io::Cursor;
 use std::sync::Arc;
 use std::time::Instant;
+
+use crate::schema::into_arrow_schema;
 
 /// Alias for convenience in refering to reference counted [ObjectStore]
 type ObjectStoreRef = Arc<dyn ObjectStore>;
@@ -33,6 +35,8 @@ pub struct Parquet {
     config: Config,
     /// Underlying object store
     store: ObjectStoreRef,
+    /// Schemas that can be used, keyed by the output "topic" identified
+    schemas: HashMap<String, arrow_schema::SchemaRef>,
     /// Receiver side of the channel for this sink
     rx: Receiver<Message>,
     /// Producer side of the channel for this sink
@@ -43,7 +47,11 @@ pub struct Parquet {
 impl Sink for Parquet {
     type Config = Config;
 
-    fn new(config: Self::Config, _stats: InputQueueScope) -> Self {
+    fn new(
+        config: Self::Config,
+        schemas: &[crate::settings::Schema],
+        _stats: InputQueueScope,
+    ) -> Self {
         let (tx, rx) = bounded(1024);
         // [object_store] largely expects environment variables to be all lowercased for
         // consideration as options
@@ -51,12 +59,22 @@ impl Sink for Parquet {
             HashMap::from_iter(std::env::vars().map(|(k, v)| (k.to_ascii_lowercase(), v)));
         let (store, _path) = object_store::parse_url_opts(&config.url, opts)
             .expect("Failed to parse the Parquet sink URL");
+        trace!("Converting schemas: {schemas:?}");
+
+        let schemas = HashMap::from_iter(schemas.iter().map(|s| {
+            (
+                s.topic.clone(),
+                Arc::new(into_arrow_schema(&s.fields).expect("Failed to convert a schema!")),
+            )
+        }));
+        debug!("Loading sink with schemas: {schemas:?}");
         let store = Arc::new(store);
         Parquet {
             config,
             tx,
             rx,
             store,
+            schemas,
         }
     }
 
@@ -86,7 +104,7 @@ impl Sink for Parquet {
             debug!("Finished listing the bucket");
         }));
 
-        let mut buffer: HashMap<String, Vec<String>> = HashMap::default();
+        let mut buffer: HashMap<String, Vec<u8>> = HashMap::default();
         let mut bufsizes: HashMap<String, usize> = HashMap::default();
         let mut since_last_flush = Instant::now();
 
@@ -109,7 +127,8 @@ impl Sink for Parquet {
                         "enqueing into `{}` (bytes: {bufsize}): {:?}",
                         &msg.destination, &msg.payload
                     );
-                    queue.push(msg.payload);
+                    queue.extend(msg.payload.as_bytes());
+                    queue.extend("\n".as_bytes());
 
                     if (since_last_flush.elapsed().as_millis() > flush_ms)
                         || (*bufsize > self.config.buffer)
@@ -120,7 +139,21 @@ impl Sink for Parquet {
                         );
                         if let Some(buf) = buffer.remove(&msg.destination) {
                             let _flush_span = span!(Level::INFO, "Parquet flush");
-                            flush_to_parquet(self.store.clone(), &msg.destination, buf);
+
+                            let schema = if let Some(schema) = self.schemas.get(&msg.destination) {
+                                schema.clone()
+                            } else {
+                                debug!("Did not have a schema, so will try inferring one!");
+                                // Use the most recent payload for the inference
+                                let mut cursor: Cursor<&str> = Cursor::new(&msg.payload);
+                                let (inferred_schema, _read) =
+                                    arrow_json::reader::infer_json_schema(&mut cursor, None)
+                                        .expect("Failed to process a JSON payload");
+                                debug!("inferred_schema! {inferred_schema:?}");
+                                Arc::new(inferred_schema)
+                            };
+
+                            flush_to_parquet(self.store.clone(), schema, &msg.destination, &buf);
                             since_last_flush = Instant::now();
                         }
                     }
@@ -131,40 +164,27 @@ impl Sink for Parquet {
 }
 
 /// Write the given buffer to a new `.parquet` file in the [ObjectStore]
-fn flush_to_parquet(store: ObjectStoreRef, destination: &str, buffer: Vec<String>) {
+fn flush_to_parquet(
+    store: ObjectStoreRef,
+    schema: Arc<arrow_schema::Schema>,
+    destination: &str,
+    buffer: &[u8],
+) {
     if buffer.is_empty() {
         warn!("Attempted to flush_to_parquet with an empty buffer");
         return;
     }
     info!(
-        "Flushing buffer with {} messages to {destination}",
+        "Flushing buffer with {} bytes to {destination}",
         buffer.len()
     );
+    trace!("Using the schema to build parquet file: {schema:?}");
 
-    //let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
-    //let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
-    let mut cursor: Cursor<&str> = Cursor::new(&buffer[0]);
-    //let mut reader = BufReader::new(GzDecoder::new(&file));
-    let (inferred_schema, _read) = arrow_json::reader::infer_json_schema(&mut cursor, None)
-        .expect("Failed to process a JSON payload");
-    debug!("inferred_schema! {inferred_schema:?}");
-    // TODO: This hould be easier, hopefully without the bytes conversion for decoding.
-    // The strings must come in fully formed as lines so the inferred_schema can work above
-    let mut buf_read = Cursor::new(Vec::new());
-
-    for line in buffer {
-        buf_read
-            .write_all(line.as_bytes())
-            .expect("Failed to write all bytes into the buffer");
-    }
-
-    // Rewind for the reader
-    let _ = buf_read.rewind();
-
-    let schema = Arc::new(inferred_schema);
-    let mut reader = ReaderBuilder::new(schema.clone())
-        .build(buf_read)
+    let mut decoder = ReaderBuilder::new(schema.clone())
+        .build_decoder()
         .expect("Failed to build the JSON decoder");
+    let decoded = decoder.decode(buffer).expect("Failed to deserialize bytes");
+    debug!("Decoded {decoded} bytes");
 
     let output =
         object_store::path::Path::from(format!("{destination}/{}.parquet", Uuid::new_v4()));
@@ -174,7 +194,10 @@ fn flush_to_parquet(store: ObjectStoreRef, destination: &str, buffer: Vec<String
         .expect("Failed to build AsyncArrowWriter");
 
     smol::block_on(Compat::new(async {
-        while let Some(Ok(batch)) = reader.next() {
+        if let Some(batch) = decoder
+            .flush()
+            .expect("Failed to flush bytes to a RecordBatch")
+        {
             writer.write(&batch).await.expect("Failed to write a batch");
         }
         let file_result = writer.close().await.expect("Failed to close the writer");

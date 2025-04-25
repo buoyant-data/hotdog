@@ -1,6 +1,6 @@
 [package]
 name = "hotdog"
-version = "1.0.2"
+version = "1.1.0"
 authors = ["R. Tyler Croy <rtyler@buoyantdata.com>"]
 edition = "2024"
 
@@ -47,6 +47,7 @@ rdkafka = { version = "0", features = ["ssl", "sasl"]}
 object_store = { version = "0.12", features = ["aws", "cloud"] }
 arrow-array = "55"
 arrow-json = "55"
+arrow-schema = "55"
 parquet = { version = "55", features = ["arrow", "async", "object_store"]}
 
 # Used for rule matching

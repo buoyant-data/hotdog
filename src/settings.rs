@@ -4,6 +4,7 @@ use serde_json::Value;
 use tracing::log::*;
 use uuid::Uuid;
 
+use std::collections::HashMap;
 use std::path::Path;
 
 pub fn load(file: &str) -> Settings {
@@ -159,21 +160,35 @@ pub struct Global {
     pub status: Option<Status>,
 }
 
+/// Schema is a definition of an Arrow schema which can be used for deserialization
+#[derive(Debug, Deserialize)]
+pub struct Schema {
+    /// Output topic this schema applies to
+    pub topic: String,
+    /// Fields of the actual schema
+    pub fields: HashMap<String, crate::schema::Field>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Settings {
     pub global: Global,
     pub rules: Vec<Rule>,
+    #[serde(default = "default_schemas")]
+    /// Optionally defined schemas for this configuration
+    pub schemas: Vec<Schema>,
 }
 
 impl Settings {
-    /**
-     * Populate any configuration caches which we want to us
-     */
+    /// Populate any configuration caches which we want to us
     fn populate_caches(&mut self) {
         self.rules.iter_mut().for_each(|rule| {
             rule.populate_caches();
         });
     }
+}
+
+fn default_schemas() -> Vec<Schema> {
+    vec![]
 }
 
 fn default_none<T>() -> Option<T> {

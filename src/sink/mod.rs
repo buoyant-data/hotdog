@@ -24,7 +24,11 @@ pub trait Sink: Send + Sync {
     /// Construct the Sink.
     ///
     /// This function should not do anything but initialize settings and variables
-    fn new(config: Self::Config, stats: InputQueueScope) -> Self;
+    fn new(
+        config: Self::Config,
+        schemas: &[crate::settings::Schema],
+        stats: InputQueueScope,
+    ) -> Self;
 
     /// Bootstrap the sink
     ///
@@ -77,7 +81,11 @@ mod tests {
     impl Sink for TestSink {
         type Config = Option<()>;
 
-        fn new(config: Option<()>, _stats: InputQueueScope) -> Self {
+        fn new(
+            config: Option<()>,
+            _schemas: &[crate::settings::Schema],
+            _stats: InputQueueScope,
+        ) -> Self {
             Self { config }
         }
 
