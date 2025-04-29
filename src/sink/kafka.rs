@@ -115,76 +115,84 @@ impl Sink for Kafka {
         loop {
             if let Ok(kmsg) = self.rx.recv().await {
                 debug!("Sending to Kafka: {:?}", kmsg);
-                /* Note, setting the `K` (key) type on FutureRecord to a string
-                 * even though we're explicitly not sending a key
-                 */
-                let stats = self.stats.clone();
-
-                let timer = self.stats.timer(&Stats::KafkaMsgSent.to_string());
-                let start_handle = timer.start();
-                let producer = producer.clone();
-
                 /*
                  * Needed in order to prevent concurrent writers from totally
                  * killing parallel performance
                  */
                 smol::future::yield_now().await;
 
-                smol::spawn(async move {
-                    let record = FutureRecord::<String, String>::to(&kmsg.destination)
-                        .payload(&kmsg.payload);
-                    let timeout = Timeout::After(Duration::from_secs(60));
-                    /*
-                     * Intentionally setting the timeout_ms to -1 here so this blocks forever if the
-                     * outbound librdkafka queue is full. This will block up the crossbeam channel
-                     * properly and cause messages to begin to be dropped, rather than buffering
-                     * "forever" inside of hotdog
-                     */
-                    match producer.send(record, timeout).await {
-                        Ok(_) => {
-                            stats
-                                .counter(
-                                    Stats::KafkaMsgSubmitted {
-                                        topic: kmsg.destination,
-                                    }
-                                    .into(),
-                                )
-                                .count(1);
-                            timer.stop(start_handle);
-                        }
-                        Err((err, _)) => {
-                            match err {
-                                /*
-                                 * err_type will be one of RdKafkaError types defined:
-                                 * https://docs.rs/rdkafka/0.23.1/rdkafka/error/enum.RDKafkaError.html
-                                 */
-                                KafkaError::MessageProduction(err_type) => {
-                                    error!("Failed to send message to Kafka due to: {}", err_type);
+                match kmsg {
+                    Message::Data {
+                        destination,
+                        payload,
+                    } => {
+                        /* Note, setting the `K` (key) type on FutureRecord to a string
+                         * even though we're explicitly not sending a key
+                         */
+                        let stats = self.stats.clone();
+                        let timer = self.stats.timer(&Stats::KafkaMsgSent.to_string());
+                        let start_handle = timer.start();
+                        let producer = producer.clone();
+
+                        smol::spawn(async move {
+                            let record =
+                                FutureRecord::<String, String>::to(&destination).payload(&payload);
+                            let timeout = Timeout::After(Duration::from_secs(60));
+                            /*
+                             * Intentionally setting the timeout_ms to -1 here so this blocks forever if the
+                             * outbound librdkafka queue is full. This will block up the crossbeam channel
+                             * properly and cause messages to begin to be dropped, rather than buffering
+                             * "forever" inside of hotdog
+                             */
+                            match producer.send(record, timeout).await {
+                                Ok(_) => {
                                     stats
                                         .counter(
-                                            Stats::KafkaMsgErrored {
-                                                errcode: metric_name_for(err_type),
-                                            }
-                                            .into(),
+                                            Stats::KafkaMsgSubmitted { topic: destination }.into(),
                                         )
                                         .count(1);
+                                    timer.stop(start_handle);
                                 }
-                                other => {
-                                    error!("Failed to send message to Kafka! {other:?}");
-                                    stats
-                                        .counter(
-                                            Stats::KafkaMsgErrored {
-                                                errcode: format!("{other:?}"),
-                                            }
-                                            .into(),
-                                        )
-                                        .count(1);
+                                Err((err, _)) => {
+                                    match err {
+                                        /*
+                                         * err_type will be one of RdKafkaError types defined:
+                                         * https://docs.rs/rdkafka/0.23.1/rdkafka/error/enum.RDKafkaError.html
+                                         */
+                                        KafkaError::MessageProduction(err_type) => {
+                                            error!(
+                                                "Failed to send message to Kafka due to: {}",
+                                                err_type
+                                            );
+                                            stats
+                                                .counter(
+                                                    Stats::KafkaMsgErrored {
+                                                        errcode: metric_name_for(err_type),
+                                                    }
+                                                    .into(),
+                                                )
+                                                .count(1);
+                                        }
+                                        other => {
+                                            error!("Failed to send message to Kafka! {other:?}");
+                                            stats
+                                                .counter(
+                                                    Stats::KafkaMsgErrored {
+                                                        errcode: format!("{other:?}"),
+                                                    }
+                                                    .into(),
+                                                )
+                                                .count(1);
+                                        }
+                                    }
                                 }
                             }
-                        }
+                        })
+                        .detach();
                     }
-                })
-                .detach();
+                    // The kafka sink doesn't support any other message types
+                    _ => {}
+                }
             }
         }
     }

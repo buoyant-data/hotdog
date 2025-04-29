@@ -20,7 +20,7 @@ use uuid::Uuid;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::schema::into_arrow_schema;
 
@@ -92,6 +92,25 @@ impl Sink for Parquet {
             .try_into()
             .expect("Failed to convert the flush_ms to a 128 bit integer");
 
+        let interval = Duration::from_millis(
+            self.config
+                .flush_ms
+                .try_into()
+                .expect("Failed to convert to u64"),
+        );
+        let timer_tx = self.tx.clone();
+
+        let _ = smol::spawn(async move {
+            let mut timer = smol::Timer::interval(interval);
+            while timer.next().await.is_some() {
+                debug!("Timer has fired, issuing a flush");
+                if let Err(e) = timer_tx.send(Message::Flush).await {
+                    error!("Failed to trigger the flush timer in the parquet sink: {e:?}");
+                }
+            }
+        })
+        .detach();
+
         debug!("Entering the Parquet sink runloop");
         smol::block_on(Compat::new(async {
             info!("Listing the bucket as a sanity check: {}", self.config.url);
@@ -111,41 +130,62 @@ impl Sink for Parquet {
         loop {
             if let Ok(msg) = self.rx.recv().await {
                 debug!("Buffering this message for Parquet output: {msg:?}");
-                let _span = span!(Level::INFO, "Parquet sink recv");
 
-                if !buffer.contains_key(&msg.destination) {
-                    buffer.insert(msg.destination.clone(), vec![]);
-                    bufsizes.insert(msg.destination.clone(), 0);
-                }
+                match msg {
+                    Message::Data {
+                        destination,
+                        payload,
+                    } => {
+                        let _span = span!(Level::INFO, "Parquet sink recv");
 
-                if let Some(queue) = buffer.get_mut(&msg.destination) {
-                    let bufsize = bufsizes
-                        .get_mut(&msg.destination)
-                        .expect("Failed to get the bufsizes somehow");
-                    (*bufsize) += msg.payload.len();
-                    debug!(
-                        "enqueing into `{}` (bytes: {bufsize}): {:?}",
-                        &msg.destination, &msg.payload
-                    );
-                    queue.extend(msg.payload.as_bytes());
-                    queue.extend("\n".as_bytes());
+                        if !buffer.contains_key(&destination) {
+                            buffer.insert(destination.clone(), vec![]);
+                            bufsizes.insert(destination.clone(), 0);
+                        }
 
-                    if (since_last_flush.elapsed().as_millis() > flush_ms)
-                        || (*bufsize > self.config.buffer)
-                    {
-                        debug!(
-                            "Reached the threshold to flush bytes for `{}`",
-                            &msg.destination
-                        );
-                        if let Some(buf) = buffer.remove(&msg.destination) {
+                        if let Some(queue) = buffer.get_mut(&destination) {
+                            let bufsize = bufsizes
+                                .get_mut(&destination)
+                                .expect("Failed to get the bufsizes somehow");
+                            (*bufsize) += payload.len();
+                            debug!(
+                                "enqueing into `{}` (bytes: {bufsize}): {:?}",
+                                &destination, &payload
+                            );
+                            queue.extend(payload.as_bytes());
+                            queue.extend("\n".as_bytes());
+
+                            if (since_last_flush.elapsed().as_millis() > flush_ms)
+                                || (*bufsize > self.config.buffer)
+                            {
+                                debug!(
+                                    "Reached the threshold to flush bytes for `{}`",
+                                    &destination
+                                );
+                                let _ = self.tx.send(Message::Flush).await;
+                            }
+                        }
+                    }
+                    Message::Flush => {
+                        info!("Parquet sink has been told to flush");
+
+                        for (destination, buf) in buffer.drain() {
                             let _flush_span = span!(Level::INFO, "Parquet flush");
 
-                            let schema = if let Some(schema) = self.schemas.get(&msg.destination) {
+                            let schema = if let Some(schema) = self.schemas.get(&destination) {
                                 schema.clone()
                             } else {
                                 debug!("Did not have a schema, so will try inferring one!");
+                                let payload = buf.as_slice();
+                                let payload = &payload[0..buf
+                                    .iter()
+                                    .position(|b| *b == b'\n')
+                                    .expect("Failed to find a newline for schema inference")];
+                                // NOTE: this is poorly tested and needs some unit test
+                                // coverage
+                                let payload = String::from_utf8_lossy(payload);
                                 // Use the most recent payload for the inference
-                                let mut cursor: Cursor<&str> = Cursor::new(&msg.payload);
+                                let mut cursor: Cursor<&str> = Cursor::new(&payload);
                                 let (inferred_schema, _read) =
                                     arrow_json::reader::infer_json_schema(&mut cursor, None)
                                         .expect("Failed to process a JSON payload");
@@ -153,7 +193,7 @@ impl Sink for Parquet {
                                 Arc::new(inferred_schema)
                             };
 
-                            flush_to_parquet(self.store.clone(), schema, &msg.destination, &buf);
+                            flush_to_parquet(self.store.clone(), schema, &destination, &buf);
                             since_last_flush = Instant::now();
                         }
                     }

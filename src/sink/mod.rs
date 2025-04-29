@@ -53,15 +53,18 @@ pub trait Sink: Send + Sync {
 /// will ultimately output them.
 ///
 /// THe `destination` may interpreted differently depending on the [Sink]!
-#[derive(Clone, Debug, Default)]
-pub struct Message {
-    destination: String,
-    payload: String,
+#[derive(Clone, Debug)]
+pub enum Message {
+    Data {
+        destination: String,
+        payload: String,
+    },
+    Flush,
 }
 
 impl Message {
     pub fn new(destination: String, payload: String) -> Self {
-        Message {
+        Message::Data {
             destination,
             payload,
         }
