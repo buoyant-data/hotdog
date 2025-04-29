@@ -5,6 +5,7 @@
 use crate::connection::*;
 use crate::errors;
 use crate::settings::Settings;
+use crate::sink::Message;
 use crate::sink::Sink;
 use crate::sink::kafka::Kafka;
 use crate::sink::parquet::Parquet;
@@ -22,44 +23,34 @@ use std::sync::Arc;
 pub mod plain;
 pub mod tls;
 
+/// State entity which can be passed into connection handlers and callbacks
+#[derive(Clone)]
 pub struct ServerState {
-    /**
-     * A reference to the global Settings object for all configuration information
-     */
+    /// A reference to the global Settings object for all configuration information
     pub settings: Arc<Settings>,
-    /**
-     * A Sender for sending statistics to the status handler
-     */
+    /// A Sender for sending statistics to the status handler
     pub stats: InputQueueScope,
 }
 
-/**
- * The Server trait describes the necessary functionality to implement a new hotdog backend server
- * which can receive syslog messages
- */
+// The Server trait describes the necessary functionality to implement a new hotdog backend server
+// which can receive syslog messages
 #[async_trait]
 pub trait Server {
-    /**
-     * Bootstrap can/should be overridden by implementations which need to perform some work prior
-     * to the creation of the TcpListener and the incoming connection loop
-     */
+    /// Bootstrap can/should be overridden by implementations which need to perform some work prior
+    /// to the creation of the TcpListener and the incoming connection loop
     fn bootstrap(&mut self, _state: &ServerState) -> Result<(), errors::HotdogError> {
         Ok(())
     }
 
-    /**
-     * Shutdown scan/should be overridden by implementations which need to perform some work after
-     * the termination of the connection accept loop
-     */
+    /// Shutdown scan/should be overridden by implementations which need to perform some work after
+    /// the termination of the connection accept loop
     fn shutdown(&self, _state: &ServerState) -> Result<(), errors::HotdogError> {
         Ok(())
     }
 
-    /**
-     * Handle a single connection
-     *
-     * The close_channel parameter must be a clone of our connection-tracking channel Sender
-     */
+    /// Handle a single connection
+    ///
+    /// The close_channel parameter must be a clone of our connection-tracking channel Sender
     fn handle_connection(
         &self,
         stream: TcpStream,
@@ -78,9 +69,7 @@ pub trait Server {
         Ok(())
     }
 
-    /**
-     * Accept connections on the addr
-     */
+    /// Accept connections on the addr
     async fn accept_loop(
         &mut self,
         addr: &str,
@@ -119,11 +108,29 @@ pub trait Server {
             smol::spawn(async move {
                 debug!("Starting Parquet loop");
                 pq.runloop().await;
+                debug!("Ending Parquet loop");
+                std::process::exit(0);
             })
             .detach();
         }
 
         let sender = sender.expect("Failed to configure a sink properly!");
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let should_exit = Arc::new(AtomicBool::new(false));
+        let se = should_exit.clone();
+
+        let ctrlc_tx = sender.clone();
+
+        ctrlc::set_handler(move || {
+            info!("Interrupt has been received! Attempting to flush");
+            se.store(true, Ordering::SeqCst);
+            let tx = ctrlc_tx.clone();
+            smol::block_on(async move {
+                tx.send(Message::Flush { should_exit: true })
+                    .await
+                    .expect("Failed to send flush command");
+            });
+        });
 
         self.bootstrap(&state)?;
 
@@ -152,10 +159,21 @@ pub trait Server {
                 .stats
                 .gauge(status::Stats::ConnectionCount.into())
                 .value(conn_count);
+
+            if should_exit.load(Ordering::Relaxed) {
+                debug!("Serve has been instructed to exit");
+                break;
+            }
         }
 
         self.shutdown(&state)?;
 
         Ok(())
     }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_placholder() {}
 }

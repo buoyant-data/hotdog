@@ -104,7 +104,7 @@ impl Sink for Parquet {
             let mut timer = smol::Timer::interval(interval);
             while timer.next().await.is_some() {
                 debug!("Timer has fired, issuing a flush");
-                if let Err(e) = timer_tx.send(Message::Flush).await {
+                if let Err(e) = timer_tx.send(Message::flush()).await {
                     error!("Failed to trigger the flush timer in the parquet sink: {e:?}");
                 }
             }
@@ -162,11 +162,11 @@ impl Sink for Parquet {
                                     "Reached the threshold to flush bytes for `{}`",
                                     &destination
                                 );
-                                let _ = self.tx.send(Message::Flush).await;
+                                let _ = self.tx.send(Message::flush()).await;
                             }
                         }
                     }
-                    Message::Flush => {
+                    Message::Flush { should_exit } => {
                         info!("Parquet sink has been told to flush");
 
                         for (destination, buf) in buffer.drain() {
@@ -195,6 +195,11 @@ impl Sink for Parquet {
 
                             flush_to_parquet(self.store.clone(), schema, &destination, &buf);
                             since_last_flush = Instant::now();
+                        }
+
+                        if should_exit {
+                            debug!("Supposed to exit from the sink!");
+                            return;
                         }
                     }
                 }

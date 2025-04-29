@@ -59,7 +59,9 @@ pub enum Message {
         destination: String,
         payload: String,
     },
-    Flush,
+    Flush {
+        should_exit: bool,
+    },
 }
 
 impl Message {
@@ -68,6 +70,10 @@ impl Message {
             destination,
             payload,
         }
+    }
+
+    pub fn flush() -> Self {
+        Message::Flush { should_exit: false }
     }
 }
 
