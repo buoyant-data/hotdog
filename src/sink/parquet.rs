@@ -6,7 +6,7 @@
 use super::{Message, Sink};
 
 use arrow_json::reader::{ReaderBuilder, infer_json_schema};
-use async_channel::{Receiver, Sender, bounded};
+use async_channel::{Receiver, Sender, unbounded};
 use async_compat::Compat;
 use dipstick::InputQueueScope;
 use object_store::ObjectStore;
@@ -52,7 +52,7 @@ impl Sink for Parquet {
         schemas: &[crate::settings::Schema],
         _stats: InputQueueScope,
     ) -> Self {
-        let (tx, rx) = bounded(1024);
+        let (tx, rx) = unbounded();
         // [object_store] largely expects environment variables to be all lowercased for
         // consideration as options
         let opts: HashMap<String, String> =
@@ -136,7 +136,7 @@ impl Sink for Parquet {
                         destination,
                         payload,
                     } => {
-                        let _span = span!(Level::INFO, "Parquet sink recv");
+                        let _span = span!(Level::DEBUG, "Parquet sink recv");
 
                         if !buffer.contains_key(&destination) {
                             buffer.insert(destination.clone(), vec![]);
