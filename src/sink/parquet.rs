@@ -5,7 +5,7 @@
 
 use super::{Message, Sink};
 
-use arrow_json::reader::ReaderBuilder;
+use arrow_json::reader::{ReaderBuilder, infer_json_schema};
 use async_channel::{Receiver, Sender, bounded};
 use async_compat::Compat;
 use dipstick::InputQueueScope;
@@ -170,32 +170,54 @@ impl Sink for Parquet {
                         info!("Parquet sink has been told to flush");
 
                         for (destination, buf) in buffer.drain() {
-                            let _flush_span = span!(Level::INFO, "Parquet flush");
+                            let _flush_span = span!(Level::INFO, "Parquet flush for", destination);
 
-                            let schema = if let Some(schema) = self.schemas.get(&destination) {
-                                schema.clone()
+                            if let Some(schema) = self.schemas.get(&destination) {
+                                flush_to_parquet(
+                                    self.store.clone(),
+                                    schema.clone(),
+                                    &destination,
+                                    &buf,
+                                );
                             } else {
-                                debug!("Did not have a schema, so will try inferring one!");
+                                info!(
+                                    "Did not have a schema, so will try inferring one for {destination}!"
+                                );
                                 let payload = buf.as_slice();
                                 let payload = &payload[0..buf
                                     .iter()
                                     .position(|b| *b == b'\n')
                                     .expect("Failed to find a newline for schema inference")];
+
                                 // NOTE: this is poorly tested and needs some unit test
                                 // coverage
                                 let payload = String::from_utf8_lossy(payload);
+                                debug!(
+                                    "Using the following payload to infer the schema for {destination}: {payload}"
+                                );
                                 // Use the most recent payload for the inference
                                 let mut cursor: Cursor<&str> = Cursor::new(&payload);
-                                let (inferred_schema, _read) =
-                                    arrow_json::reader::infer_json_schema(&mut cursor, None)
-                                        .expect("Failed to process a JSON payload");
-                                debug!("inferred_schema! {inferred_schema:?}");
-                                Arc::new(inferred_schema)
-                            };
-
-                            flush_to_parquet(self.store.clone(), schema, &destination, &buf);
-                            since_last_flush = Instant::now();
+                                match infer_json_schema(&mut cursor, None) {
+                                    Ok((inferred_schema, _read)) => {
+                                        flush_to_parquet(
+                                            self.store.clone(),
+                                            Arc::new(inferred_schema),
+                                            &destination,
+                                            &buf,
+                                        );
+                                    }
+                                    Err(err) => {
+                                        error!(
+                                            "Failed to infer a JSON schema from the payload for {destination}! {err:?}"
+                                        );
+                                        error!(
+                                            "I cannot do anything but throw away the data v_v: {payload}"
+                                        );
+                                    }
+                                }
+                            }
                         }
+                        since_last_flush = Instant::now();
 
                         if should_exit {
                             debug!("Supposed to exit from the sink!");
