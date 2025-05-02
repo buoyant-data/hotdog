@@ -136,7 +136,7 @@ impl Sink for Parquet {
                         destination,
                         payload,
                     } => {
-                        let _span = span!(Level::DEBUG, "Parquet sink recv");
+                        let _span = span!(Level::TRACE, "Parquet sink recv");
 
                         if !buffer.contains_key(&destination) {
                             buffer.insert(destination.clone(), vec![]);
@@ -178,7 +178,8 @@ impl Sink for Parquet {
                                     schema.clone(),
                                     &destination,
                                     &buf,
-                                );
+                                )
+                                .await;
                             } else {
                                 info!(
                                     "Did not have a schema, so will try inferring one for {destination}!"
@@ -204,7 +205,8 @@ impl Sink for Parquet {
                                             Arc::new(inferred_schema),
                                             &destination,
                                             &buf,
-                                        );
+                                        )
+                                        .await;
                                     }
                                     Err(err) => {
                                         error!(
@@ -231,7 +233,7 @@ impl Sink for Parquet {
 }
 
 /// Write the given buffer to a new `.parquet` file in the [ObjectStore]
-fn flush_to_parquet(
+async fn flush_to_parquet(
     store: ObjectStoreRef,
     schema: Arc<arrow_schema::Schema>,
     destination: &str,
@@ -250,26 +252,39 @@ fn flush_to_parquet(
     let mut decoder = ReaderBuilder::new(schema.clone())
         .build_decoder()
         .expect("Failed to build the JSON decoder");
-    let decoded = decoder.decode(buffer).expect("Failed to deserialize bytes");
-    debug!("Decoded {decoded} bytes");
-
     let output =
         object_store::path::Path::from(format!("{destination}/{}.parquet", Uuid::new_v4()));
-
     let object_writer = ParquetObjectWriter::new(store.clone(), output.clone());
     let mut writer = AsyncArrowWriter::try_new(object_writer, schema.clone(), None)
         .expect("Failed to build AsyncArrowWriter");
 
-    smol::block_on(Compat::new(async {
-        if let Some(batch) = decoder
-            .flush()
-            .expect("Failed to flush bytes to a RecordBatch")
-        {
-            writer.write(&batch).await.expect("Failed to write a batch");
+    let total_bytes = buffer.len();
+    let mut read_bytes = 0;
+
+    Compat::new(async {
+        loop {
+            let decoded = decoder
+                .decode(&buffer[read_bytes..])
+                .expect("Failed to deserialize bytes");
+            debug!("Decoded {decoded} bytes");
+            read_bytes += decoded;
+
+            if let Some(batch) = decoder
+                .flush()
+                .expect("Failed to flush bytes to a RecordBatch")
+            {
+                debug!("Wrote a batch");
+                writer.write(&batch).await.expect("Failed to write a batch");
+            }
+
+            if read_bytes >= total_bytes {
+                break;
+            }
         }
         let file_result = writer.close().await.expect("Failed to close the writer");
         info!("Flushed {} rows to storage", file_result.num_rows);
-    }));
+    })
+    .await;
 }
 
 /// Configuration for [Parquet] sink

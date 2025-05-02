@@ -130,7 +130,8 @@ pub trait Server {
                     .await
                     .expect("Failed to send flush command");
             });
-        });
+        })
+        .expect("Failed to set the SIGTERM/SIGINT handler, oh no!");
 
         self.bootstrap(&state)?;
 

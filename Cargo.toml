@@ -1,6 +1,6 @@
 [package]
 name = "hotdog"
-version = "1.2.2"
+version = "1.2.3"
 authors = ["R. Tyler Croy <rtyler@buoyantdata.com>"]
 edition = "2024"
 
