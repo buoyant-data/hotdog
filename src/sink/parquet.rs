@@ -101,6 +101,7 @@ impl Sink for Parquet {
         let timer_tx = self.tx.clone();
 
         let _ = smol::spawn(async move {
+            info!("The flush timer has been set up for {interval:?}");
             let mut timer = smol::Timer::interval(interval);
             while timer.next().await.is_some() {
                 debug!("Timer has fired, issuing a flush");
@@ -129,7 +130,7 @@ impl Sink for Parquet {
 
         loop {
             if let Ok(msg) = self.rx.recv().await {
-                debug!("Buffering this message for Parquet output: {msg:?}");
+                smol::future::yield_now().await;
 
                 match msg {
                     Message::Data {
@@ -137,6 +138,7 @@ impl Sink for Parquet {
                         payload,
                     } => {
                         let _span = span!(Level::TRACE, "Parquet sink recv");
+                        debug!("Buffering this message for Parquet output: {destination}");
 
                         if !buffer.contains_key(&destination) {
                             buffer.insert(destination.clone(), vec![]);
@@ -155,19 +157,19 @@ impl Sink for Parquet {
                             queue.extend(payload.as_bytes());
                             queue.extend("\n".as_bytes());
 
-                            if (since_last_flush.elapsed().as_millis() > flush_ms)
-                                || (*bufsize > self.config.buffer)
-                            {
-                                debug!(
-                                    "Reached the threshold to flush bytes for `{}`",
-                                    &destination
-                                );
-                                let _ = self.tx.send(Message::flush()).await;
+                            if let Some(max_buffer) = &self.config.buffer {
+                                if (*bufsize) >= *max_buffer {
+                                    debug!(
+                                        "Reached the threshold to flush bytes for `{}`",
+                                        &destination
+                                    );
+                                    let _ = self.tx.send(Message::flush()).await;
+                                }
                             }
                         }
                     }
                     Message::Flush { should_exit } => {
-                        info!("Parquet sink has been told to flush");
+                        debug!("Parquet sink has been told to flush");
 
                         for (destination, buf) in buffer.drain() {
                             let _flush_span = span!(Level::INFO, "Parquet flush for", destination);
@@ -294,8 +296,7 @@ pub struct Config {
     /// Expected to be an S3 compatible URL
     pub url: Url,
     /// Minimum number of bytes to buffer into each parquet file
-    #[serde(default = "parquet_buffer_default")]
-    pub buffer: usize,
+    pub buffer: Option<usize>,
     /// Duration in milliseconds before a flush to storage should happen
     #[serde(default = "parquet_flush_default")]
     pub flush_ms: usize,
@@ -309,14 +310,9 @@ fn parquet_url_default() -> Url {
     .expect("The S3_OUTPUT_URL could not be parsed as a valid URL")
 }
 
-/// Default number of log lines per parquet file
-fn parquet_buffer_default() -> usize {
-    1_024 * 1_024 * 100
-}
-
 /// Default milliseconds before a Parquet sink flush
 fn parquet_flush_default() -> usize {
-    1000 * 10
+    1000 * 60
 }
 
 #[cfg(test)]
@@ -330,7 +326,6 @@ mod tests {
 url: 's3://bucket'
         "#;
         let parquet: Config = serde_yaml::from_str(conf).expect("Failed to deserialize");
-        assert_eq!(parquet.buffer, parquet_buffer_default());
         assert_eq!(parquet.flush_ms, parquet_flush_default());
         assert_eq!(
             parquet.url,
@@ -340,7 +335,6 @@ url: 's3://bucket'
 
     #[test]
     fn test_defaults() {
-        assert!(0 < parquet_buffer_default());
         assert!(0 < parquet_flush_default());
     }
 }
