@@ -5,13 +5,14 @@
 
 use super::{Message, Sink};
 
+use arrow_array::RecordBatch;
 use arrow_json::reader::{ReaderBuilder, infer_json_schema};
-use async_channel::{Receiver, Sender, unbounded};
-use async_compat::Compat;
+use arrow_schema::{ArrowError, SchemaRef};
 use dipstick::InputQueueScope;
+use futures::StreamExt;
 use object_store::ObjectStore;
 use parquet::arrow::async_writer::{AsyncArrowWriter, ParquetObjectWriter};
-use smol::stream::StreamExt;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tracing::log::*;
 use tracing::{Level, span};
 use url::Url;
@@ -29,7 +30,6 @@ type ObjectStoreRef = Arc<dyn ObjectStore>;
 
 /// Parquet sink which handles creating parquet files from buffers and writing them into the
 /// storage layer
-#[derive(Clone)]
 pub struct Parquet {
     /// Configuration from the hotdog.yml
     config: Config,
@@ -38,9 +38,9 @@ pub struct Parquet {
     /// Schemas that can be used, keyed by the output "topic" identified
     schemas: HashMap<String, arrow_schema::SchemaRef>,
     /// Receiver side of the channel for this sink
-    rx: Receiver<Message>,
+    rx: UnboundedReceiver<Message>,
     /// Producer side of the channel for this sink
-    tx: Sender<Message>,
+    tx: UnboundedSender<Message>,
 }
 
 #[async_trait::async_trait]
@@ -52,7 +52,7 @@ impl Sink for Parquet {
         schemas: &[crate::settings::Schema],
         _stats: InputQueueScope,
     ) -> Self {
-        let (tx, rx) = unbounded();
+        let (tx, rx) = unbounded_channel();
         // [object_store] largely expects environment variables to be all lowercased for
         // consideration as options
         let opts: HashMap<String, String> =
@@ -78,11 +78,11 @@ impl Sink for Parquet {
         }
     }
 
-    fn get_sender(&self) -> Sender<Message> {
+    fn get_sender(&self) -> UnboundedSender<Message> {
         self.tx.clone()
     }
 
-    async fn runloop(&self) {
+    async fn runloop(&mut self) {
         // Converting this at the beginning of the function to ensure that it doesn't need to be
         // done in the loop and if the configuration is invalid then the sink fails as early as
         // possible
@@ -100,37 +100,36 @@ impl Sink for Parquet {
         );
         let timer_tx = self.tx.clone();
 
-        let _ = smol::spawn(async move {
+        tokio::spawn(async move {
             info!("The flush timer has been set up for {interval:?}");
-            let mut timer = smol::Timer::interval(interval);
-            while timer.next().await.is_some() {
+            let mut timer = tokio::time::interval(interval);
+            // Skip the immediate first tick that tokio's interval emits.
+            timer.tick().await;
+            loop {
+                timer.tick().await;
                 debug!("Timer has fired, issuing a flush");
-                if let Err(e) = timer_tx.send(Message::flush()).await {
+                if let Err(e) = timer_tx.send(Message::flush()) {
                     error!("Failed to trigger the flush timer in the parquet sink: {e:?}");
                 }
             }
-        })
-        .detach();
+        });
 
         debug!("Entering the Parquet sink runloop");
-        smol::block_on(Compat::new(async {
-            info!("Listing the bucket as a sanity check: {}", self.config.url);
-            let mut list_stream = self.store.list(None);
-
-            // Print a line about each object
-            if let Some(meta) = list_stream.next().await.transpose().unwrap() {
-                debug!("Name: {}, size: {}", meta.location, meta.size);
-            }
-            debug!("Finished listing the bucket");
-        }));
+        info!("Listing the bucket as a sanity check: {}", self.config.url);
+        let mut list_stream = self.store.list(None);
+        if let Some(meta) = list_stream.next().await.transpose().unwrap() {
+            debug!("Name: {}, size: {}", meta.location, meta.size);
+        }
+        drop(list_stream);
+        debug!("Finished listing the bucket");
 
         let mut buffer: HashMap<String, Vec<u8>> = HashMap::default();
         let mut bufsizes: HashMap<String, usize> = HashMap::default();
         let mut since_last_flush = Instant::now();
 
         loop {
-            if let Ok(msg) = self.rx.recv().await {
-                smol::future::yield_now().await;
+            if let Some(msg) = self.rx.recv().await {
+                tokio::task::yield_now().await;
 
                 match msg {
                     Message::Data {
@@ -163,7 +162,7 @@ impl Sink for Parquet {
                                         "Reached the threshold to flush bytes for `{}`",
                                         &destination
                                     );
-                                    let _ = self.tx.send(Message::flush()).await;
+                                    let _ = self.tx.send(Message::flush());
                                 }
                             }
                         }
@@ -251,42 +250,104 @@ async fn flush_to_parquet(
     );
     trace!("Using the schema to build parquet file: {schema:?}");
 
-    let mut decoder = ReaderBuilder::new(schema.clone())
-        .build_decoder()
-        .expect("Failed to build the JSON decoder");
+    let batches = match decode_bulk(buffer, schema.clone()) {
+        Ok(batches) => batches,
+        Err(err) => {
+            warn!(
+                "Bulk JSON decode failed for {destination} ({err}); falling back to per-line decode to salvage valid rows"
+            );
+            let (batches, skipped) = decode_per_line(buffer, schema.clone());
+            if skipped > 0 {
+                warn!("Skipped {skipped} unparseable record(s) for {destination}");
+            }
+            batches
+        }
+    };
+
+    if batches.is_empty() {
+        warn!("No valid records to write for {destination}");
+        return;
+    }
+
     let output =
         object_store::path::Path::from(format!("{destination}/{}.parquet", Uuid::new_v4()));
     let object_writer = ParquetObjectWriter::new(store.clone(), output.clone());
     let mut writer = AsyncArrowWriter::try_new(object_writer, schema.clone(), None)
         .expect("Failed to build AsyncArrowWriter");
 
+    for batch in batches {
+        writer.write(&batch).await.expect("Failed to write a batch");
+    }
+    let file_result = writer.close().await.expect("Failed to close the writer");
+    info!("Flushed {} rows to storage", file_result.num_rows);
+}
+
+/// Decode the entire `buffer` of newline-delimited JSON into batches in one shot.
+///
+/// Returns `Err` if any row in the buffer fails to parse or coerce to the schema; the caller
+/// is expected to fall back to [`decode_per_line`] to salvage the good rows.
+fn decode_bulk(buffer: &[u8], schema: SchemaRef) -> Result<Vec<RecordBatch>, ArrowError> {
+    let mut decoder = ReaderBuilder::new(schema).build_decoder()?;
+    let mut batches = Vec::new();
     let total_bytes = buffer.len();
     let mut read_bytes = 0;
 
-    Compat::new(async {
-        loop {
-            let decoded = decoder
-                .decode(&buffer[read_bytes..])
-                .expect("Failed to deserialize bytes");
-            debug!("Decoded {decoded} bytes");
-            read_bytes += decoded;
+    while read_bytes < total_bytes {
+        let decoded = decoder.decode(&buffer[read_bytes..])?;
+        if decoded == 0 {
+            break;
+        }
+        read_bytes += decoded;
+        if let Some(batch) = decoder.flush()? {
+            batches.push(batch);
+        }
+    }
+    if let Some(batch) = decoder.flush()? {
+        batches.push(batch);
+    }
+    Ok(batches)
+}
 
-            if let Some(batch) = decoder
-                .flush()
-                .expect("Failed to flush bytes to a RecordBatch")
-            {
-                debug!("Wrote a batch");
-                writer.write(&batch).await.expect("Failed to write a batch");
-            }
+/// Decode `buffer` line by line with a fresh decoder per line so that one bad record only
+/// loses itself rather than the whole batch. Returns the successfully decoded batches and a
+/// count of skipped records.
+fn decode_per_line(buffer: &[u8], schema: SchemaRef) -> (Vec<RecordBatch>, usize) {
+    let mut batches = Vec::new();
+    let mut skipped: usize = 0;
 
-            if read_bytes >= total_bytes {
-                break;
+    for line in buffer.split(|b| *b == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        match decode_one_line(line, schema.clone()) {
+            Ok(Some(batch)) => batches.push(batch),
+            Ok(None) => {}
+            Err(err) => {
+                let preview = String::from_utf8_lossy(line);
+                let truncated: String = preview.chars().take(256).collect();
+                warn!("Skipping unparseable record ({err}): {truncated:?}");
+                skipped += 1;
             }
         }
-        let file_result = writer.close().await.expect("Failed to close the writer");
-        info!("Flushed {} rows to storage", file_result.num_rows);
-    })
-    .await;
+    }
+
+    (batches, skipped)
+}
+
+fn decode_one_line(line: &[u8], schema: SchemaRef) -> Result<Option<RecordBatch>, ArrowError> {
+    let mut decoder = ReaderBuilder::new(schema).build_decoder()?;
+    let mut framed = Vec::with_capacity(line.len() + 1);
+    framed.extend_from_slice(line);
+    framed.push(b'\n');
+    let mut read = 0;
+    while read < framed.len() {
+        let n = decoder.decode(&framed[read..])?;
+        if n == 0 {
+            break;
+        }
+        read += n;
+    }
+    decoder.flush()
 }
 
 /// Configuration for [Parquet] sink
@@ -336,5 +397,32 @@ url: 's3://bucket'
     #[test]
     fn test_defaults() {
         assert!(0 < parquet_flush_default());
+    }
+
+    fn user_id_schema() -> SchemaRef {
+        Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+            "user_id",
+            arrow_schema::DataType::Int64,
+            true,
+        )]))
+    }
+
+    #[test]
+    fn test_decode_bulk_fails_on_bad_row() {
+        let buf = b"{\"user_id\": 1}\n{\"user_id\": \"\"}\n{\"user_id\": 3}\n";
+        let result = decode_bulk(buf, user_id_schema());
+        assert!(
+            result.is_err(),
+            "expected bulk decode to fail on a row with empty-string user_id"
+        );
+    }
+
+    #[test]
+    fn test_decode_per_line_skips_bad_row() {
+        let buf = b"{\"user_id\": 1}\n{\"user_id\": \"\"}\n{\"user_id\": 3}\n";
+        let (batches, skipped) = decode_per_line(buf, user_id_schema());
+        let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total, 2, "expected the two valid rows to survive");
+        assert_eq!(skipped, 1, "expected exactly one row to be skipped");
     }
 }

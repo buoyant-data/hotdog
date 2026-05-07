@@ -3,7 +3,6 @@
 //! sending log lines along as Kafka messages
 //!
 
-use async_channel::{Receiver, Sender, bounded};
 use dipstick::{InputQueueScope, InputScope};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
@@ -12,6 +11,7 @@ use rdkafka::error::{KafkaError, RDKafkaErrorCode};
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::util::Timeout;
 use serde::Deserialize;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tracing::log::*;
 
 use std::collections::HashMap;
@@ -33,8 +33,8 @@ pub struct Kafka {
      */
     producer: Option<FutureProducer<DefaultClientContext>>,
     stats: InputQueueScope,
-    rx: Receiver<Message>,
-    tx: Sender<Message>,
+    rx: UnboundedReceiver<Message>,
+    tx: UnboundedSender<Message>,
 }
 
 #[async_trait::async_trait]
@@ -42,7 +42,7 @@ impl Sink for Kafka {
     type Config = Config;
 
     fn new(config: Config, _schemas: &[crate::settings::Schema], stats: InputQueueScope) -> Self {
-        let (tx, rx) = bounded(config.buffer);
+        let (tx, rx) = unbounded_channel();
         Kafka {
             producer: None,
             config,
@@ -54,7 +54,7 @@ impl Sink for Kafka {
 
     /// get_sender() will return a cloned reference to the sender suitable for tasks or threads to
     /// consume and take ownership of
-    fn get_sender(&self) -> Sender<Message> {
+    fn get_sender(&self) -> UnboundedSender<Message> {
         self.tx.clone()
     }
 
@@ -104,7 +104,7 @@ impl Sink for Kafka {
         panic!("Failed to connect to a Kafka broker: {:?}", self.config);
     }
 
-    async fn runloop(&self) {
+    async fn runloop(&mut self) {
         debug!("Entering the Kafka runloop");
         if self.producer.is_none() {
             panic!("Cannot enter the runloop() without a valid producer");
@@ -113,13 +113,13 @@ impl Sink for Kafka {
         let producer = self.producer.as_ref().unwrap();
 
         loop {
-            if let Ok(kmsg) = self.rx.recv().await {
+            if let Some(kmsg) = self.rx.recv().await {
                 debug!("Sending to Kafka: {:?}", kmsg);
                 /*
                  * Needed in order to prevent concurrent writers from totally
                  * killing parallel performance
                  */
-                smol::future::yield_now().await;
+                tokio::task::yield_now().await;
 
                 match kmsg {
                     Message::Data {
@@ -134,7 +134,7 @@ impl Sink for Kafka {
                         let start_handle = timer.start();
                         let producer = producer.clone();
 
-                        smol::spawn(async move {
+                        tokio::spawn(async move {
                             let record =
                                 FutureRecord::<String, String>::to(&destination).payload(&payload);
                             let timeout = Timeout::After(Duration::from_secs(60));
@@ -187,8 +187,7 @@ impl Sink for Kafka {
                                     }
                                 }
                             }
-                        })
-                        .detach();
+                        });
                     }
                     // The kafka sink doesn't support any other message types
                     _ => {}
@@ -237,9 +236,9 @@ mod tests {
     /**
      * Test that trying to connect to a nonexistent cluster returns false
      */
-    #[test]
+    #[tokio::test]
     #[should_panic]
-    fn test_connect_bad_cluster() {
+    async fn test_connect_bad_cluster() {
         let mut conf = HashMap::<String, String>::new();
         conf.insert(
             String::from("bootstrap.servers"),
@@ -251,7 +250,7 @@ mod tests {
         let bucket = dipstick::AtomicBucket::new();
         let stats = InputQueueScope::wrap(bucket.clone(), 100);
         let mut k = Kafka::new(config, &[], stats);
-        smol::block_on(k.bootstrap());
+        k.bootstrap().await;
     }
 
     /**

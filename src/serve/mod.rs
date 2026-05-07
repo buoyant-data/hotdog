@@ -13,9 +13,8 @@ use crate::status;
 use async_trait::async_trait;
 use dipstick::InputQueueScope;
 use dipstick::InputScope;
-use smol::io::BufReader;
-use smol::net::{SocketAddr, TcpListener, TcpStream};
-use smol::stream::StreamExt;
+use tokio::io::BufReader;
+use tokio::net::{TcpListener, TcpStream};
 use tracing::log::*;
 
 use std::sync::Arc;
@@ -59,12 +58,11 @@ pub trait Server {
         debug!("Accepting from: {}", stream.peer_addr()?);
         let reader = BufReader::new(stream);
 
-        smol::spawn(async move {
+        tokio::spawn(async move {
             if let Err(e) = connection.read_logs(reader).await {
                 error!("Failure occurred while read_logs executed: {:?}", e);
             }
-        })
-        .detach();
+        });
 
         Ok(())
     }
@@ -75,7 +73,6 @@ pub trait Server {
         addr: &str,
         state: ServerState,
     ) -> Result<(), errors::HotdogError> {
-        let addr: SocketAddr = addr.parse().expect("Failed to parse the listen address");
         let mut sender = None;
 
         // If the Kafka sink is defined in the configuration, then spin up the configuration
@@ -90,57 +87,53 @@ pub trait Server {
             kafka.bootstrap().await;
             sender = Some(kafka.get_sender());
 
-            smol::spawn(async move {
+            tokio::spawn(async move {
                 debug!("Starting Kafka loop");
                 kafka.runloop().await;
-            })
-            .detach();
+            });
         }
 
         if let Some(parquet_conf) = &state.settings.global.parquet {
             info!("Configuring a Parquet sink with: {parquet_conf:?}");
-            let pq = Parquet::new(
+            let mut pq = Parquet::new(
                 parquet_conf.clone(),
                 &state.settings.schemas,
                 state.stats.clone(),
             );
             sender = Some(pq.get_sender());
-            smol::spawn(async move {
+            tokio::spawn(async move {
                 debug!("Starting Parquet loop");
                 pq.runloop().await;
                 debug!("Ending Parquet loop");
                 std::process::exit(0);
-            })
-            .detach();
+            });
         }
 
         let sender = sender.expect("Failed to configure a sink properly!");
         use std::sync::atomic::{AtomicBool, Ordering};
         let should_exit = Arc::new(AtomicBool::new(false));
-        let se = should_exit.clone();
+        let signal_should_exit = should_exit.clone();
+        let signal_tx = sender.clone();
 
-        let ctrlc_tx = sender.clone();
-
-        ctrlc::set_handler(move || {
+        tokio::spawn(async move {
+            if let Err(e) = tokio::signal::ctrl_c().await {
+                error!("Failed to listen for ctrl-c: {e:?}");
+                return;
+            }
             info!("Interrupt has been received! Attempting to flush");
-            se.store(true, Ordering::SeqCst);
-            let tx = ctrlc_tx.clone();
-            smol::block_on(async move {
-                tx.send(Message::Flush { should_exit: true })
-                    .await
-                    .expect("Failed to send flush command");
-            });
-        })
-        .expect("Failed to set the SIGTERM/SIGINT handler, oh no!");
+            signal_should_exit.store(true, Ordering::SeqCst);
+            if let Err(e) = signal_tx.send(Message::Flush { should_exit: true }) {
+                error!("Failed to send flush command: {e:?}");
+            }
+        });
 
         self.bootstrap(&state)?;
 
         let listener = TcpListener::bind(addr).await?;
-        let mut incoming = listener.incoming();
         let mut conn_count = 0;
 
-        while let Some(stream) = incoming.next().await {
-            let stream = stream?;
+        loop {
+            let (stream, _peer) = listener.accept().await?;
             debug!("Accepting from: {}", stream.peer_addr()?);
 
             let connection =

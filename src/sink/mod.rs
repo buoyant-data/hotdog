@@ -3,8 +3,8 @@
 //! This is not meant to be a robust rich system, like Vector, but just something simplistic to
 //! serve syslog only
 
-use async_channel::Sender;
 use dipstick::InputQueueScope;
+use tokio::sync::mpsc::UnboundedSender;
 
 pub mod kafka;
 pub mod parquet;
@@ -39,14 +39,14 @@ pub trait Sink: Send + Sync {
     /// of a two-stage initialization (i.e. connection) process
     async fn bootstrap(&mut self) {}
 
-    /// Return a [Sender] which is capable of communicating with the [Sink]
-    fn get_sender(&self) -> Sender<Message>;
+    /// Return a [UnboundedSender] which is capable of communicating with the [Sink]
+    fn get_sender(&self) -> UnboundedSender<Message>;
 
     /// Runloop which should be spawned into its own task for the sink to perform its consumption
     /// duties.
     ///
     /// This function should be spun into its own task and panic if anything goes wrong.
-    async fn runloop(&self);
+    async fn runloop(&mut self);
 }
 
 /// The [Message] struct is used for bringing messages between the receivers and the sinks that
@@ -98,12 +98,12 @@ mod tests {
             Self { config }
         }
 
-        fn get_sender(&self) -> Sender<Message> {
-            let (tx, _rx) = async_channel::bounded(1);
+        fn get_sender(&self) -> UnboundedSender<Message> {
+            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
             tx
         }
 
-        async fn runloop(&self) {
+        async fn runloop(&mut self) {
             unreachable!("This should never be invoked in tests");
         }
     }

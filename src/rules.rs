@@ -2,9 +2,8 @@
 //! Rules processing
 //!
 
-use smol::fs::*;
-use smol::io::{AsyncBufReadExt, BufReader};
-use smol::stream::StreamExt;
+use tokio::fs::File;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::log::*;
 
 use std::collections::HashMap;
@@ -24,8 +23,7 @@ pub async fn test_rules(
     let mut lines = reader.lines();
     let mut number: u64 = 0;
 
-    while let Some(line) = lines.next().await {
-        let line = line?;
+    while let Some(line) = lines.next_line().await? {
         debug!("Testing the line: {}", line);
         number += 1;
         let mut matches: Vec<&Rule> = vec![];

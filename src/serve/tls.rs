@@ -6,11 +6,11 @@ use crate::errors;
 use crate::serve::{Server, ServerState};
 use crate::settings::*;
 
-use async_tls::TlsAcceptor;
 use rustls::server::ServerConfig;
 use rustls::{Certificate, PrivateKey};
-use smol::io::BufReader;
-use smol::net::TcpStream;
+use tokio::io::BufReader;
+use tokio::net::TcpStream;
+use tokio_rustls::TlsAcceptor;
 use tracing::log::*;
 
 use std::path::Path;
@@ -48,7 +48,7 @@ impl Server for TlsServer {
         // Calling `acceptor.accept` will start the TLS handshake
         let handshake = self.acceptor.accept(stream);
 
-        smol::spawn(async move {
+        tokio::spawn(async move {
             // The handshake is a future we can await to get an encrypted
             // stream back.
             match handshake.await {
@@ -63,8 +63,7 @@ impl Server for TlsServer {
                     error!("Unable to establish a TLS Stream for client! {:?}", err);
                 }
             };
-        })
-        .detach();
+        });
         Ok(())
     }
 }

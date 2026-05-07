@@ -30,8 +30,8 @@ use settings::*;
 #[global_allocator]
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
-/// Non-async entrypoint which will set up the logger and launch the main smol task
-fn main() -> Result<(), errors::HotdogError> {
+#[tokio::main(flavor = "multi_thread")]
+async fn main() -> Result<(), errors::HotdogError> {
     pretty_env_logger::init();
     info!("Starting hotdog version {}", env!["CARGO_PKG_VERSION"]);
 
@@ -43,48 +43,11 @@ fn main() -> Result<(), errors::HotdogError> {
         orig_hook(panic_info);
         std::process::exit(1);
     }));
-    smol::block_on(run())
-}
-
-/// This function pins the running smol threads to cores to reduce the potential context switching
-/// and cache misses when processing data as threads are spread around. This _may_ be a premature
-/// optimization.
-fn pin_cores() {
-    use affinity::*;
-    let cores: Vec<usize> = match std::env::var("SMOL_THREADS") {
-        Ok(count) => {
-            let count: usize = count.parse().expect("Failed to parse the SMOL_THREADS");
-            debug!("Requested {count} threads for smol");
-            let core_count = get_core_num();
-            debug!("Counting {core_count} cores");
-            // If we've been asked to use a _lot_ of threads, forget core affinity
-            if count > core_count {
-                return;
-            }
-            // If threads are equal to cores, pin each one by one
-            if core_count == count {
-                (0..get_core_num()).step_by(1).collect()
-            }
-            // Otherwise step by two to avoid pinning to hyperthreaded "cores" and get physical
-            // CPUs if possible
-            else {
-                (0..get_core_num()).step_by(2).collect()
-            }
-        }
-        Err(_) => (0..get_core_num()).step_by(2).collect(),
-    };
-    info!("Binding thread to cores : {:?}", &cores);
-
-    set_thread_affinity(&cores).unwrap();
-    info!(
-        "Current thread affinity : {:?}",
-        get_thread_affinity().unwrap()
-    );
+    run().await
 }
 
 /// Main asynchronous runloop
 async fn run() -> Result<(), errors::HotdogError> {
-    pin_cores();
     let matches = App::new("Hotdog")
         .version(env!("CARGO_PKG_VERSION"))
         .author("R Tyler Croy <rtyler@buoyantdata.com>")
@@ -118,7 +81,7 @@ async fn run() -> Result<(), errors::HotdogError> {
     let input = InputQueueScope::wrap(metrics, 1_000);
 
     if let Some(st) = &settings.global.status {
-        let _task = smol::spawn(status::status_server(format!("{}:{}", st.address, st.port)));
+        let _task = tokio::spawn(status::status_server(format!("{}:{}", st.address, st.port)));
     }
 
     if let Some(test_file) = matches.value_of("test") {

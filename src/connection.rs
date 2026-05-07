@@ -1,11 +1,10 @@
 //! The connection module is responsible for handling everything pertaining to a single inbound TCP
 //! connection.
-use async_channel::Sender;
 use chrono::prelude::*;
 use dipstick::{InputQueueScope, InputScope};
 use handlebars::Handlebars;
-use smol::io::{AsyncBufReadExt, BufReader};
-use smol::stream::StreamExt;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::sync::mpsc::UnboundedSender;
 use tracing::log::*;
 
 use std::collections::HashMap;
@@ -48,12 +47,16 @@ pub struct Connection {
     settings: Arc<Settings>,
     /// The sender-side of the channel to our Kafka connection, allowing the logs read in to be
     /// sent over to the Kafka handler
-    sender: Sender<Message>,
+    sender: UnboundedSender<Message>,
     stats: InputQueueScope,
 }
 
 impl Connection {
-    pub fn new(settings: Arc<Settings>, sender: Sender<Message>, stats: InputQueueScope) -> Self {
+    pub fn new(
+        settings: Arc<Settings>,
+        sender: UnboundedSender<Message>,
+        stats: InputQueueScope,
+    ) -> Self {
         Connection {
             settings,
             sender,
@@ -62,7 +65,7 @@ impl Connection {
     }
 
     /// connection_loop is responsible for handling incoming syslog streams connections
-    pub async fn read_logs<R: smol::io::AsyncRead + std::marker::Unpin>(
+    pub async fn read_logs<R: tokio::io::AsyncRead + std::marker::Unpin>(
         &self,
         reader: BufReader<R>,
     ) -> Result<(), errors::HotdogError> {
@@ -82,8 +85,7 @@ impl Connection {
         }
         let timestamp = Utc::now().to_rfc3339();
 
-        while let Some(line) = lines.next().await {
-            let line = line?;
+        while let Some(line) = lines.next_line().await? {
             trace!("log: {}", line);
 
             let parsed = parse::parse_line(line);
@@ -166,15 +168,8 @@ impl Connection {
                  */
                 for index in 0..rule.actions.len() {
                     let action = &rule.actions[index];
-                    /*
-                     * @stjepang says this will fix slow future polling
-                     *
-                     * The underlying problem here is that this _can_ be a very tight
-                     * and CPU-bound loop under heavy load conditions. There is nothing
-                     * inherent in smol (under async-std 1.6.x) which will properly
-                     * yield to other tasks in the runtime.
-                     */
-                    smol::future::yield_now().await;
+                    // Cooperative yield to allow other tasks to make progress under heavy load.
+                    tokio::task::yield_now().await;
 
                     match action {
                         Action::Forward { topic } => {
@@ -193,15 +188,9 @@ impl Connection {
                                  * should be skipped.
                                  */
                                 let kmsg = Message::new(actual_topic, output);
-                                let _ = self.sender.send(kmsg).await;
+                                let _ = self.sender.send(kmsg);
                                 debug!("Sent message to internal channel for dispatch to sink");
-                                /*
-                                 * Ensure that we're allowing other tasks to execute when we pass
-                                 * things off to the channel
-                                 *
-                                 * See also https://github.com/stjepang/smol/issues/159
-                                 */
-                                smol::future::yield_now().await;
+                                tokio::task::yield_now().await;
                                 continue_rules = false;
                             } else {
                                 error!("Failed to process the configured topic: `{}`", topic);

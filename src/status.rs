@@ -3,8 +3,8 @@
 //!
 //! The status module is also responsible for dispatching _all_ statsd metrics.
 
+use axum::{Json, Router, routing::get};
 use serde::{Deserialize, Serialize};
-use tide::{Body, Request, Response, StatusCode};
 use tracing::log::*;
 
 use std::collections::HashMap;
@@ -21,21 +21,20 @@ struct HealthResponse {
 
 /// Launch the simple status/healthcheck server
 pub async fn status_server(listen_to: String) -> Result<(), std::io::Error> {
-    let mut app = tide::new();
     debug!("Starting the status server on: {}", listen_to);
 
-    app.at("/")
-        .get(|_| async move { Ok("hotdog status server") });
+    let app = Router::new()
+        .route("/", get(|| async { "hotdog status server" }))
+        .route(
+            "/stats",
+            get(|| async {
+                let health: HashMap<String, String> = HashMap::default();
+                Json(health)
+            }),
+        );
 
-    app.at("/stats").get(|_req: Request<()>| async move {
-        let health: HashMap<String, String> = HashMap::default();
-
-        let mut res = Response::new(StatusCode::Ok);
-        res.set_body(Body::from_json(&health)?);
-        Ok(res)
-    });
-
-    app.listen(listen_to).await?;
+    let listener = tokio::net::TcpListener::bind(listen_to).await?;
+    axum::serve(listener, app).await?;
     Ok(())
 }
 
